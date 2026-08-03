@@ -8,7 +8,6 @@ from app.models.post import Post
 from app.services import maintenance
 from app.services import streaks as streaks_svc
 from app.services import users as users_svc
-from app.services.users import get_tweetscout_client  # noqa: F401 (patched target)
 
 
 # ---- reset_daily_credits ----
@@ -57,7 +56,11 @@ class _FakeTweetScout:
 
 async def test_fetch_tweetscout_for_user(make_user, db_session, monkeypatch):
     user = await make_user(telegram_id=10004, x_username="v")
-    monkeypatch.setattr(users_svc, "get_tweetscout_client", lambda: _FakeTweetScout())
+    # users_svc imports `get_score_client` from loudrr_analytics with a
+    # from-import, so it becomes a module-level attribute of users_svc that
+    # we can patch. (Old name was get_tweetscout_client — renamed when the
+    # TweetScout call moved behind the loudrr_analytics abstraction.)
+    monkeypatch.setattr(users_svc, "get_score_client", lambda: _FakeTweetScout())
     ok = await users_svc.fetch_tweetscout_for_user(db_session, user.id)
     assert ok is True
     await db_session.refresh(user)
@@ -83,8 +86,11 @@ def test_worker_settings_registered():
     assert "reset_broken_streaks" in names
     # karma-decay port: daily 02:00 UTC inactivity decay
     assert "decay_inactive_karma" in names
-    assert len(WorkerSettings.functions) == 10
-    assert len(WorkerSettings.cron_jobs) == 8
+    # outbox durability: the stuck-outbox sweeper (mirrors requeue_stuck_batches
+    # for OutboxEvent.status='processing' — same worker-crash class of bug).
+    assert "requeue_stuck_outbox_events" in names
+    assert len(WorkerSettings.functions) == 11
+    assert len(WorkerSettings.cron_jobs) == 9
 
 
 # ---- requeue_stuck_batches (service-audit P1: stuck-batch recovery) ----

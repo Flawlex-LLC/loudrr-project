@@ -19,7 +19,9 @@ class _FakeTweetScout:
 
 
 def _mock_tweetscout(monkeypatch, data):
-    monkeypatch.setattr(svc, "get_tweetscout_client", lambda: _FakeTweetScout(data))
+    # svc imports `get_score_client` (renamed from get_tweetscout_client when
+    # the TweetScout call moved behind the loudrr_analytics abstraction).
+    monkeypatch.setattr(svc, "get_score_client", lambda: _FakeTweetScout(data))
 
 
 _PROFILE = {

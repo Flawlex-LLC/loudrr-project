@@ -11,7 +11,7 @@ from datetime import datetime
 
 from app.core.errors import BadRequest
 from app.core.time_utils import utcnow
-from app.integrations.tweetscout import get_tweetscout_client
+from app.integrations.loudrr_analytics import get_score_client
 from app.models.user import User
 from app.repositories.x_profile import XProfileRepository
 from app.services import feed
@@ -77,7 +77,7 @@ async def link_x_account(db, *, user: User, x_username: str) -> dict:
         raise BadRequest("Invalid username format")
 
     # external call FIRST, holding no lock (spec §7)
-    data = await get_tweetscout_client().get_user_data(x_username)
+    data = await get_score_client().get_user_data(x_username)
     if data is None:
         raise BadRequest("Username not found. Please check and try again.")
 
@@ -113,7 +113,7 @@ async def complete_onboarding(db, *, user: User) -> dict:
             "tier": tier.tier_for(user.tweetscout_score),
         }
 
-    data = await get_tweetscout_client().get_user_data(user.x_username)
+    data = await get_score_client().get_user_data(user.x_username)
     if not data:
         # benefit of the doubt: let them in with a default score, retry later
         user.tweetscout_score = 0
@@ -147,7 +147,7 @@ async def fetch_tweetscout_for_user(db, user_id) -> bool:
     user = await db.get(User, user_id)
     if user is None or not user.x_username:
         return False
-    data = await get_tweetscout_client().get_user_data(user.x_username)
+    data = await get_score_client().get_user_data(user.x_username)
     if not data:
         return False
     score = float(data.get("score", 0) or 0)

@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     tweetscout_api_key: str = ""
     twitter_api_key: str = ""
 
+    # Creator score source: "loudrr" (OUR own influence graph, the loudrr-analytics-service — the
+    # data backing; stops paying TweetScout) or "tweetscout" (legacy paid). The Loudrr Score is
+    # 0-6000 but tiers top out at 1000 (GOAT), so it's fed straight into tier_for with no rescale.
+    score_source: str = "loudrr"
+    # Base URL of the loudrr-analytics-service (its keyless /v1/profile). Required when
+    # score_source="loudrr"; empty -> graceful "default score, retry later" (like a missing API key).
+    loudrr_analytics_url: str = ""
+
     # --- X OAuth 2.0 (Ch11) ---
     x_oauth_client_id: str = ""
     x_oauth_client_secret: str = ""
@@ -81,9 +89,39 @@ class Settings(BaseSettings):
     # when debug=True, else 'prod'. Override to 'staging' etc. in .env.
     sentry_environment: str = ""
 
+    # --- deployment environment (prod-guard) ---
+    # One of: "dev" | "staging" | "prod". When set to "prod" the app REFUSES
+    # to boot if any dev-only footgun is active (debug=True, blank secret,
+    # blank admin_password). Set ENVIRONMENT=prod in your prod .env — the
+    # default "" leaves the guard off so local dev is frictionless.
+    environment: str = ""
+
 
 # business logic settings
 settings = Settings()  # type: ignore[call-arg]  # pydantic-settings reads required fields from .env at runtime
+
+
+# --- prod-guard: fail fast on dev-only settings shipped to prod ---
+# The `?telegram_id=` auth bypass, the default insecure SECRET_KEY, and a
+# blank ADMIN_PASSWORD are all safe locally but catastrophic in prod. Rather
+# than trust "we set it right in the .env" and hope, refuse to boot when
+# ENVIRONMENT=prod combines with any of them. Ops sees a clear crash instead
+# of a silently-vulnerable service.
+if settings.environment == "prod":
+    _prod_errors: list[str] = []
+    if settings.debug:
+        _prod_errors.append("DEBUG=True — the ?telegram_id= auth bypass is active. Set DEBUG=False.")
+    if settings.secret_key == "dev-insecure-secret-change-me":
+        _prod_errors.append("SECRET_KEY is the dev default — set a real 32+ char secret.")
+    if not settings.admin_password:
+        _prod_errors.append("ADMIN_PASSWORD is empty — SQLAdmin login is disabled entirely.")
+    if not settings.telegram_bot_token:
+        _prod_errors.append("TELEGRAM_BOT_TOKEN is empty — HMAC verification cannot run, all auth will 401.")
+    if _prod_errors:
+        raise RuntimeError(
+            "ENVIRONMENT=prod but the following dev-only settings are still active — refusing to boot:\n  - "
+            + "\n  - ".join(_prod_errors)
+        )
 
 # Configure structured logging the moment Settings is built — every subsequent
 # `logging.getLogger(__name__)` call across the codebase will route through

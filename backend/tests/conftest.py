@@ -21,12 +21,24 @@ from app.services import site_settings
 TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/loudrr_test"
 
 
-# Postgres ENUM types declared by SQLAlchemy ORM models. Base.metadata.
-# drop_all() drops TABLES but NOT ENUM types (CREATE TYPE is a separate DDL
-# verb that lives at the pg_catalog level). List EVERY native ENUM name
-# declared on the ORM here so the session-scoped reset can nuke them.
-# ADD a name here whenever you add a new ENUM column.
-_PG_ENUM_TYPES = ("transactiontype", "xp_transaction_type")
+async def _discover_pg_enum_types(conn) -> list[str]:
+    """Return every ENUM type in the current DB's `public` schema.
+
+    Base.metadata.drop_all() drops TABLES but NOT ENUM types (CREATE TYPE is
+    a separate DDL verb at the pg_catalog level). Rather than hand-maintain
+    a hardcoded list — which silently rots the moment anyone adds a new
+    native ENUM column and starts flaking tests with "type X already exists"
+    — we introspect pg_type at teardown time. Zero-maintenance: whatever
+    lives in pg_catalog gets nuked, no matter what the ORM currently
+    declares. `typtype='e'` filters to enum types only; schema='public'
+    keeps us out of Postgres's built-ins.
+    """
+    result = await conn.execute(text(
+        "SELECT t.typname FROM pg_type t "
+        "JOIN pg_namespace n ON t.typnamespace = n.oid "
+        "WHERE t.typtype='e' AND n.nspname='public'"
+    ))
+    return [row[0] for row in result]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -98,10 +110,11 @@ async def db_session():
     """
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     # BEFORE the test: drop tables, drop ENUM types (drop_all leaves them),
-    # then build every table fresh.
+    # then build every table fresh. ENUM names discovered from pg_type — no
+    # hand-maintained list to drift out of sync with the ORM.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
-        for type_name in _PG_ENUM_TYPES:
+        for type_name in await _discover_pg_enum_types(conn):
             await conn.execute(text(f"DROP TYPE IF EXISTS {type_name} CASCADE"))
         await conn.run_sync(Base.metadata.create_all)
     Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -119,7 +132,7 @@ async def db_session():
     # AFTER the test: drop tables + ENUM types, close the connection pool
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
-        for type_name in _PG_ENUM_TYPES:
+        for type_name in await _discover_pg_enum_types(conn):
             await conn.execute(text(f"DROP TYPE IF EXISTS {type_name} CASCADE"))
     await engine.dispose()
 

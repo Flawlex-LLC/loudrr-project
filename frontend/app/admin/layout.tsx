@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { Toaster } from 'sonner';
 import {
   ChevronLeft,
@@ -19,6 +19,13 @@ import { TopBar } from '@/components/admin/TopBar';
 import { adminApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
+type AdminMe = {
+  id: string;
+  telegram_id: number | null;
+  telegram_username: string;
+  role: 'admin' | 'superadmin' | '';
+};
+
 const NAV_BASE: Array<Omit<SidebarItem, 'badge'> & { badgeKey?: 'waitlist' | 'xVerification' }> = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/admin/waitlist', label: 'Waitlist', icon: UserCheck, badgeKey: 'waitlist' },
@@ -28,13 +35,6 @@ const NAV_BASE: Array<Omit<SidebarItem, 'badge'> & { badgeKey?: 'waitlist' | 'xV
 ];
 
 const COLLAPSE_KEY = 'loudrr.admin.sidebar.collapsed';
-
-// Hardcoded dev user — matches the Oxblest superadmin seeded for local dev.
-const DEV_USER = {
-  initial: 'O',
-  telegram_username: 'Oxblest',
-  role: 'superadmin' as const,
-};
 
 function breadcrumbFromPathname(pathname: string): string[] {
   // /admin              -> ['Admin', 'Dashboard']
@@ -53,9 +53,38 @@ function breadcrumbFromPathname(pathname: string): string[] {
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [pendingWaitlist, setPendingWaitlist] = useState<number>(0);
   const [pendingX, setPendingX] = useState<number>(0);
+  // `me === null` means "still loading"; a real object means authorized.
+  // A non-admin gets redirected before this state ever flips off null.
+  const [me, setMe] = useState<AdminMe | null>(null);
+
+  // Gate: fetch the calling user's identity + role BEFORE mounting the
+  // admin shell. If the /me/ call 403s (non-admin) or 401s (no session),
+  // punt to /. Otherwise render normally. Server RBAC still enforces per-
+  // endpoint access — this is a UX guard to fail fast + friendly instead
+  // of loading the shell and watching every data query 403 individually.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const identity = await adminApi.me();
+        if (cancelled) return;
+        if (!identity.role) {
+          router.replace('/');
+          return;
+        }
+        setMe(identity);
+      } catch {
+        if (!cancelled) router.replace('/');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   // Restore collapsed state from localStorage on mount.
   useEffect(() => {
@@ -109,25 +138,29 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const breadcrumb = breadcrumbFromPathname(pathname);
 
+  const userDisplayName = me?.telegram_username || (me?.telegram_id ? `@${me.telegram_id}` : '—');
+  const userInitial = (userDisplayName[0] || '?').toUpperCase();
+
   const footer = (
     <div className={cn('flex flex-col gap-2', collapsed && 'items-center')}>
-      {/* UserPill */}
+      {/* UserPill — driven by /api/admin/me/ (the gate ensures `me` is set
+          before the shell renders, so we don't need a loading placeholder). */}
       <div
         className={cn(
           'flex items-center gap-2 rounded-md px-2 py-1.5',
           collapsed ? 'justify-center' : 'hover:bg-white/[0.04]',
         )}
-        title={collapsed ? `${DEV_USER.telegram_username} (${DEV_USER.role})` : undefined}
+        title={collapsed ? `${userDisplayName} (${me?.role || 'admin'})` : undefined}
       >
         <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[#f95400] text-xs font-bold text-black">
-          {DEV_USER.initial}
+          {userInitial}
         </div>
         {!collapsed && (
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
             <span className="truncate text-xs font-medium text-zinc-200">
-              {DEV_USER.telegram_username}
+              {userDisplayName}
             </span>
-            {DEV_USER.role === 'superadmin' && (
+            {me?.role === 'superadmin' && (
               <span
                 className="inline-flex items-center gap-0.5 rounded border border-purple-900/60 bg-purple-950/60 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-purple-300"
                 title="Superadmin"
@@ -155,6 +188,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </button>
     </div>
   );
+
+  // Gate: don't render the shell until /me/ resolves. On the non-admin path
+  // we've already fired router.replace('/') so we'd unmount immediately —
+  // no shell flash, no data fetches. Simple full-screen bg keeps the visual
+  // continuity while the auth check flies.
+  if (!me) {
+    return <div className="h-screen w-screen bg-[#0a0a0a]" />;
+  }
 
   // globals.css locks html/body overflow for the Telegram mini-app, so the
   // admin shell owns its own scroll. Root is h-screen + overflow-hidden;

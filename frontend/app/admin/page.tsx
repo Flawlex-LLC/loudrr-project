@@ -142,20 +142,26 @@ export default function AdminDashboard() {
   const [karmaRange, setKarmaRange] = useState<Range>(30);
   const [karmaLoading, setKarmaLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Real display name from /me/ — the layout already gated the route so the
+  // call always succeeds by the time this page renders. Duplicate call is
+  // cheap (cached by the layout's initial fetch in most browsers).
+  const [greetingName, setGreetingName] = useState<string>('');
 
-  // Initial parallel load — stats + 30d karma + 200 users.
+  // Initial parallel load — stats + 30d karma + 200 users + who am I.
   useEffect(() => {
     let cancelled = false;
     Promise.all([
       adminApi.getStats(),
       adminApi.getTimeseries('karma_earned', 30),
       adminApi.searchUsers('', 200),
+      adminApi.me(),
     ])
-      .then(([s, k, u]) => {
+      .then(([s, k, u, me]) => {
         if (cancelled) return;
         setStats(s);
         setKarmaSeries(k);
         setUsers(u);
+        setGreetingName(me.telegram_username || (me.telegram_id ? `@${me.telegram_id}` : 'admin'));
       })
       .catch((e: Error) => {
         if (cancelled) return;
@@ -295,7 +301,7 @@ export default function AdminDashboard() {
           <div className="relative flex flex-col items-start justify-between gap-6 lg:flex-row lg:items-center">
             <div className="min-w-0">
               <h1 className="font-syne text-2xl font-bold tracking-tight text-white">
-                Welcome back, Oxblest
+                Welcome back{greetingName ? `, ${greetingName}` : ''}
               </h1>
               <p className="mt-1 text-sm text-zinc-400">
                 You&rsquo;re watching{' '}

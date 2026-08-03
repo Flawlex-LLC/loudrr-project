@@ -62,6 +62,24 @@ class SiteSettingUpdateBody(BaseModel):
     value: str = Field(max_length=255)
 
 
+# ---- identity ----
+@router.get("/me/")
+async def me(admin: User = Depends(require_admin)):
+    """Who am I? Returns the calling admin's identity so the frontend admin
+    shell can render the real user (not a hardcoded placeholder) and gate
+    the /admin route client-side — non-admins get a 403 here BEFORE the
+    admin UI mounts and starts firing data queries that would each 403
+    on their own. This endpoint IS the authoritative gate check; server
+    RBAC still enforces per-endpoint access, this just lets the UI fail
+    fast + friendly."""
+    return {
+        "id": str(admin.id),
+        "telegram_id": admin.telegram_id,
+        "telegram_username": admin.telegram_username or "",
+        "role": admin.role or "",
+    }
+
+
 # ---- user credit + ban operations ----
 @router.post("/users/{user_id}/grant-credits/")
 async def grant_credits(

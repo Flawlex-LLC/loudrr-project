@@ -807,6 +807,14 @@ export const adminApi = {
       { method: 'POST', body: JSON.stringify({ notes }) }
     ),
 
+  me: () =>
+    adminApiRequest<{
+      id: string;
+      telegram_id: number | null;
+      telegram_username: string;
+      role: 'admin' | 'superadmin' | '';
+    }>(`/me/`),
+
   getStats: () => adminApiRequest<AdminStats>(`/stats/`),
 
   getTimeseries: (metric: TimeseriesMetric, days = 30) =>

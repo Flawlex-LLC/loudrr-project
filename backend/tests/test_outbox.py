@@ -326,3 +326,53 @@ async def test_drain_dispatches_claim_completed(db_session, monkeypatch):
     ev = (await OutboxEventRepository(db_session).list(limit=1))[0]
     assert ev.status == "sent"
     assert ev.processed_at is not None
+
+
+async def test_requeue_stuck_processing_recovers_crashed_worker(db_session):
+    """A worker that dies AFTER flipping PENDING→PROCESSING but BEFORE writing
+    SENT/PENDING/FAILED strands the event in PROCESSING forever — drain()
+    skips it because its filter is `status=PENDING`. The sweeper flips it
+    back so the next drain picks it up."""
+    from datetime import timedelta
+
+    # Fresh event, then simulate a mid-dispatch worker crash: mark it
+    # PROCESSING, set updated_at BEFORE the sweeper cutoff (default 10 min).
+    ev = await OutboxService.queue_telegram_notification(
+        db_session, telegram_id=999, message="post-crash orphan"
+    )
+    ev.status = "processing"
+    ev.updated_at = utcnow() - timedelta(minutes=15)  # older than 10-min cutoff
+    await db_session.commit()
+
+    requeued = await outbox.requeue_stuck_processing(db_session)
+    assert requeued == 1
+
+    await db_session.refresh(ev)
+    assert ev.status == "pending"
+
+
+async def test_requeue_stuck_processing_leaves_fresh_processing_alone(db_session):
+    """A worker mid-dispatch (still within the cutoff) must NOT be preempted —
+    that would race the real worker's SENT write and duplicate delivery."""
+    from datetime import timedelta
+
+    ev = await OutboxService.queue_telegram_notification(
+        db_session, telegram_id=1000, message="actively being sent"
+    )
+    ev.status = "processing"
+    ev.updated_at = utcnow() - timedelta(seconds=30)  # well within the 10-min cutoff
+    await db_session.commit()
+
+    requeued = await outbox.requeue_stuck_processing(db_session)
+    assert requeued == 0
+
+    await db_session.refresh(ev)
+    assert ev.status == "processing"  # untouched
+
+
+async def test_worker_registers_stuck_outbox_sweeper():
+    """The arq worker MUST include the stuck-outbox sweeper — a wiring test
+    so the fn doesn't silently drop out of the schedule."""
+    from app.tasks.worker import WorkerSettings
+    fn_names = {f.__name__ for f in WorkerSettings.functions}
+    assert "requeue_stuck_outbox_events" in fn_names

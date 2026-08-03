@@ -45,6 +45,18 @@ async def cleanup_old_outbox_events(ctx):
         return await outbox.cleanup_old(db)
 
 
+async def requeue_stuck_outbox_events(ctx):
+    """Sweep OutboxEvent rows stuck in `processing` past the expected
+    dispatch window. Recovers from arq worker death BETWEEN the
+    PENDING→PROCESSING flip and the PROCESSING→SENT/PENDING/FAILED write
+    inside `outbox.drain`. Without this, a worker crash silently strands
+    Telegram notifications, waitlist mails, X-verification pings — real
+    data-delivery loss with no operator signal.
+    """
+    async with SessionLocal() as db:
+        return await outbox.requeue_stuck_processing(db)
+
+
 async def reset_daily_credits(ctx):
     async with SessionLocal() as db:
         return await maintenance.reset_daily_credits(db)
@@ -88,6 +100,7 @@ class WorkerSettings:
         process_pending_outbox_events,
         retry_failed_outbox_events,
         cleanup_old_outbox_events,
+        requeue_stuck_outbox_events,
         reset_daily_credits,
         expire_old_posts,
         requeue_stuck_batches,
@@ -110,6 +123,10 @@ class WorkerSettings:
         # automated — Django leaves it manual). Sweeps batches stuck in
         # pending/processing past the expected processing window.
         cron(requeue_stuck_batches, minute=set(range(0, 60, 5))),
+        # sweep OutboxEvent rows stuck in `processing` — mirrors the batch
+        # sweeper for the same worker-crash class of bug. Every 5 min at an
+        # offset so both sweeps don't fight for the same DB locks.
+        cron(requeue_stuck_outbox_events, minute=set(range(2, 60, 5))),
         # streak hygiene: zero current_streak for users who didn't engage
         # yesterday OR today. Runs 5 min after the daily-credit reset so it
         # doesn't fight for locks with reset_daily_credits.

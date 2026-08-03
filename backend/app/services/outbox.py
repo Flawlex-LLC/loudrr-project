@@ -441,6 +441,42 @@ async def retry_failed(db) -> int:
     return len(rows)
 
 
+async def requeue_stuck_processing(db, *, older_than_minutes: int = 10) -> int:
+    """Reset OutboxEvent rows stuck in `processing` back to `pending`.
+
+    `drain()` flips PENDING → PROCESSING before delivery, then PROCESSING →
+    SENT / PENDING / FAILED on outcome. If the worker crashes (OOM, SIGKILL,
+    infra restart) between those two writes, the event stays PROCESSING
+    forever and `drain()` never picks it up again — silent data-delivery
+    loss (Telegram notifications, waitlist mails, X-verification pings).
+
+    Mirrors the `requeue_stuck_batches` recovery pattern used for
+    VerificationBatch. Runs on a cron so a crash's blast radius is bounded
+    to `older_than_minutes` — well past the longest single dispatch we ever
+    expect (Telegram sendMessage p99 ~2s). Returns the number of rows
+    requeued so callers / logs can alert on non-zero counts.
+    """
+    cutoff = utcnow() - timedelta(minutes=older_than_minutes)
+    stuck = (
+        await db.execute(
+            select(OutboxEvent).where(
+                OutboxEvent.status == OutboxStatus.PROCESSING.value,
+                OutboxEvent.updated_at < cutoff,
+            )
+        )
+    ).scalars().all()
+    for ev in stuck:
+        ev.status = OutboxStatus.PENDING.value
+        ev.updated_at = utcnow()
+    await db.commit()
+    if stuck:
+        logger.warning(
+            "outbox: requeued %d stuck-in-processing events (probable worker crash)",
+            len(stuck),
+        )
+    return len(stuck)
+
+
 async def cleanup_old(db, *, older_than_days: int = 30) -> int:
     """Delete sent events older than N days."""
     cutoff = utcnow() - timedelta(days=older_than_days)

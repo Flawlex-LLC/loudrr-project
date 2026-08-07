@@ -5,13 +5,14 @@
 # Mirrors the Django reference's dev.ps1 (projects/loudrr/dev.ps1) but adapted
 # for the FastAPI stack: uvicorn + arq worker instead of Django + django-q2.
 #
-# Opens 6 tabs in one Windows Terminal window:
-#   1. Postgres (docker compose, port 5432)
-#   2. Redis    (docker compose, port 6379)
-#   3. uvicorn  (FastAPI backend, port 8000)
-#   4. arq      (worker — runs outbox drain, daily credit reset, post expiry crons)
-#   5. Next.js  (frontend, port 3000)
-#   6. logs     (interactive shell for ad-hoc queries / curl)
+# Opens 7 tabs in one Windows Terminal window:
+#   1. Postgres  (docker compose, port 5432)
+#   2. Redis     (docker compose, port 6379)
+#   3. uvicorn   (FastAPI backend, port 8000)
+#   4. arq       (worker — outbox drain, daily credit reset, post expiry crons)
+#   5. Next.js   (frontend, port 3000)
+#   6. cloudflared (tunnel: dev-api.loudrr.com -> :8000, dev-app.loudrr.com -> :3000)
+#   7. shell     (interactive shell for ad-hoc queries / curl)
 #
 # If Windows Terminal isn't installed, falls back to separate PowerShell windows.
 # Tear down with:  .\scripts\dev-stop.ps1
@@ -70,6 +71,11 @@ $tabs = @(
     @{ Title = "FastAPI :8000";   Cmd = "cd '$backend'; & '$python' -m uvicorn app.main:app --port 8000 --reload" }
     @{ Title = "arq worker";      Cmd = "cd '$backend'; & '$python' -m arq app.tasks.worker.WorkerSettings" }
     @{ Title = "Next.js :3000";   Cmd = "cd '$frontend'; & 'C:\Program Files\nodejs\npm.cmd' run dev" }
+    # cloudflared: exposes localhost through gyaway.loudrr.com hostnames so Telegram
+    # (which can't dial 127.0.0.1) and any live tester can hit the app. Tunnel
+    # `loudrr-dev` + config live at ~/.cloudflared/{config.yml, cert.pem, <uuid>.json};
+    # ingress maps dev-api.loudrr.com -> :8000 and dev-app.loudrr.com -> :3000.
+    @{ Title = "cloudflared";     Cmd = "cloudflared tunnel run loudrr-dev" }
     @{ Title = "shell";           Cmd = "cd '$projectRoot'; & '$venv'" }
 )
 
@@ -116,13 +122,18 @@ if ($wt) {
 Write-Host ""
 Write-Host "All services starting!" -ForegroundColor Green
 Write-Host ""
-Write-Host "URLs:" -ForegroundColor Cyan
+Write-Host "URLs (local):" -ForegroundColor Cyan
 Write-Host "  Backend:           http://localhost:8000"
 Write-Host "  API docs:          http://localhost:8000/docs"
 Write-Host "  SQLAdmin panel:    http://localhost:8000/admin   (set ADMIN_PASSWORD in backend/.env)"
 Write-Host "  Frontend:          http://localhost:3000"
 Write-Host "  Admin dashboard:   http://localhost:3000/admin"
 Write-Host "  Mini-app:          http://localhost:3000/app"
+Write-Host ""
+Write-Host "URLs (via Cloudflare tunnel — live from anywhere, incl. Telegram):" -ForegroundColor Cyan
+Write-Host "  Backend:           https://dev-api.loudrr.com"
+Write-Host "  Frontend:          https://dev-app.loudrr.com"
+Write-Host "  Mini-app:          https://dev-app.loudrr.com/app  (set MINIAPP_URL to this in .env for real bot buttons)"
 Write-Host ""
 Write-Host "Notes:" -ForegroundColor Cyan
 Write-Host "  - arq worker runs cron jobs: outbox drain (every minute), daily credit reset"

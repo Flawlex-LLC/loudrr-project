@@ -34,18 +34,17 @@ class Settings(BaseSettings):
     use_task_queue: bool = False
 
     # --- External services (Ch10/11/13/15) ---
-    # TweetScout: clout score + X profile (Ch10). Twitter: reply verification (Ch13).
+    # TweetScout: legacy clout score (Ch10, retired — see loudrr_analytics).
     tweetscout_api_key: str = ""
-    twitter_api_key: str = ""
 
     # Loudrr gateway — our own drop-in twitterapi.io-compatible service that
     # fronts twitterapi.io through gateway.loudrr.com (same /twitter paths,
-    # same params, same response shapes, same x-api-key auth — the analytics
-    # service already runs against it, verified 2026-06-18). When
-    # loudrr_gateway_api is set, reply verification routes through us; when
-    # blank it falls back to api.twitterapi.io using twitter_api_key.
-    # gateway_base_url is the host root (WITHOUT the trailing /twitter path
-    # segment — twitter.py appends it).
+    # same params, same response shapes, same x-api-key auth). This is the
+    # ONLY upstream for reply verification (Ch13) — we intentionally do NOT
+    # fall back to api.twitterapi.io direct; if the gateway isn't configured,
+    # verification returns the benefit-of-the-doubt "skipped+passed" result
+    # (users are never punished for our infra being down — spec §0 #8, §5.2).
+    # gateway_base_url is the host root; twitter.py appends /twitter.
     loudrr_gateway_api: str = ""
     gateway_base_url: str = "https://gateway.loudrr.com"
 

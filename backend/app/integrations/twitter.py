@@ -1,13 +1,20 @@
-"""Twitter API client via twitterapi.io (spec §7, Ch13).
+"""Twitter API client via the loudrr gateway (spec §7, Ch13).
 
 Used in Phase 1 of verification to confirm a user replied to a tweet. Like
 verification is impossible (X made likes private in 2024), so we only check
-replies. This is a *paid, quota-limited* API — every call costs money.
+replies.
 
-Benefit-of-the-doubt failure policy (spec §0 #8, §5.2): if there's no API key,
-or the API errors/times out, verification is treated as **passed + skipped** —
-we never punish a user because our verification path is down. Only a definitive
-"no reply found" is a real failure.
+The gateway (gateway.loudrr.com) is our own drop-in twitterapi.io-compatible
+service — same /twitter paths, same params, same response shapes, same
+x-api-key auth. It is the ONLY upstream: we deliberately do NOT fall back to
+api.twitterapi.io direct, so every X call routes through infrastructure we
+control (cost, rate-limit fairness, egress observability, and one place to
+kill an abusive tenant).
+
+Benefit-of-the-doubt failure policy (spec §0 #8, §5.2): if the gateway isn't
+configured, or the API errors/times out, verification is treated as
+**passed + skipped** — we never punish a user because our verification path
+is down. Only a definitive "no reply found" is a real failure.
 """
 import logging
 import re
@@ -19,23 +26,22 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Default upstream. The loudrr gateway (gateway_base_url + loudrr_gateway_api)
-# is a drop-in twitterapi.io-compatible service — same /twitter paths, same
-# params, same response shapes, same x-api-key auth (verified 2026-06-18
-# against the analytics service which runs against it). When configured, we
-# route reply verification through us instead of paying twitterapi.io direct.
-_TWITTERAPI_ROOT = "https://api.twitterapi.io"
 _TIMEOUT = httpx.Timeout(30.0)
 
 
 def _resolve_upstream() -> tuple[str, str]:
-    """Return (base_url_with_/twitter_suffix, api_key) — prefers the loudrr
-    gateway when configured, else falls back to api.twitterapi.io. Read at
-    request time (not module import) so a settings change in tests / a
-    monkeypatch doesn't need a re-import."""
-    if settings.loudrr_gateway_api:
-        return (f"{settings.gateway_base_url.rstrip('/')}/twitter", settings.loudrr_gateway_api)
-    return (f"{_TWITTERAPI_ROOT}/twitter", settings.twitter_api_key)
+    """Return (base_url_with_/twitter_suffix, api_key) from the gateway
+    settings. Read at request time (not module import) so a settings change
+    or a monkeypatch takes effect without a re-import.
+
+    No fallback: if loudrr_gateway_api is unset the api_key is empty, and
+    verify_reply's `if not self.api_key` guard trips first, returning the
+    benefit-of-the-doubt skipped+passed result before any HTTP is attempted.
+    """
+    return (
+        f"{settings.gateway_base_url.rstrip('/')}/twitter",
+        settings.loudrr_gateway_api,
+    )
 
 _TWEET_ID_PATTERNS = [
     re.compile(r"(?:twitter\.com|x\.com)/\w+/status/(\d+)"),

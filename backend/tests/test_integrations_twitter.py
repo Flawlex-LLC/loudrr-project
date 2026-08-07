@@ -125,14 +125,16 @@ class TestTwitterClientInit:
         assert c.api_key == "explicit-key"
 
     def test_falls_back_to_settings(self, monkeypatch):
-        monkeypatch.setattr(tw.settings, "twitter_api_key", "from-settings")
+        # Gateway-only: the resolved default is settings.loudrr_gateway_api
+        # (no api.twitterapi.io fallback exists).
+        monkeypatch.setattr(tw.settings, "loudrr_gateway_api", "from-settings")
         c = TwitterClient()
         assert c.api_key == "from-settings"
 
     def test_empty_string_key_is_kept(self, monkeypatch):
         # An *explicit* "" overrides settings — None is the only sentinel
         # that triggers the settings fallback.
-        monkeypatch.setattr(tw.settings, "twitter_api_key", "from-settings")
+        monkeypatch.setattr(tw.settings, "loudrr_gateway_api", "from-settings")
         c = TwitterClient(api_key="")
         assert c.api_key == ""
 
@@ -141,7 +143,7 @@ class TestTwitterClientInit:
         assert c._headers() == {"X-API-Key": "abc"}
 
     def test_get_twitter_client_factory(self, monkeypatch):
-        monkeypatch.setattr(tw.settings, "twitter_api_key", "factory-key")
+        monkeypatch.setattr(tw.settings, "loudrr_gateway_api", "factory-key")
         c = get_twitter_client()
         assert isinstance(c, TwitterClient)
         assert c.api_key == "factory-key"
@@ -394,44 +396,48 @@ class TestGetTweetContent:
 
 
 # ---------------------------------------------------------------------------
-# gateway routing — verify LOUDRR_GATEWAY_API takes precedence over TWITTER_API_KEY
+# gateway routing — gateway.loudrr.com is the ONLY upstream (no fallback)
 # ---------------------------------------------------------------------------
 class TestGatewayRouting:
     """The loudrr gateway (gateway.loudrr.com) is a drop-in twitterapi.io-
-    compatible service. When LOUDRR_GATEWAY_API is set, TwitterClient must
-    route through it INSTEAD of api.twitterapi.io — otherwise we pay for
-    twitterapi credits directly instead of going through our own gateway."""
+    compatible service and the ONLY upstream. We intentionally do NOT fall
+    back to api.twitterapi.io direct — every X call must route through
+    infrastructure we control. If the gateway isn't configured, verify_reply
+    short-circuits via the benefit-of-the-doubt no-api-key branch."""
 
     def test_gateway_selected_when_key_set(self, monkeypatch):
         """LOUDRR_GATEWAY_API set → base_url + api_key come from gateway settings."""
         from app.core.config import settings as app_settings
         monkeypatch.setattr(app_settings, "loudrr_gateway_api", "gw-key-abc")
         monkeypatch.setattr(app_settings, "gateway_base_url", "https://gateway.loudrr.com")
-        monkeypatch.setattr(app_settings, "twitter_api_key", "should-not-be-used")
 
         client = TwitterClient()
         assert client.base_url == "https://gateway.loudrr.com/twitter"
         assert client.api_key == "gw-key-abc"
 
-    def test_falls_back_to_twitterapi_io_when_gateway_key_empty(self, monkeypatch):
-        """LOUDRR_GATEWAY_API blank → falls back to twitterapi.io + twitter_api_key.
-        Preserves backwards compat for existing deploys that haven't wired the gateway."""
+    def test_no_fallback_to_twitterapi_io(self, monkeypatch):
+        """LOUDRR_GATEWAY_API blank → api_key is empty; base_url still points at
+        the gateway host. verify_reply's `if not self.api_key` guard trips first
+        and returns the benefit-of-the-doubt skipped+passed result. Critically:
+        base_url MUST NOT be api.twitterapi.io — that would leak traffic outside
+        our infra the moment someone forgets to set the gateway env var."""
         from app.core.config import settings as app_settings
         monkeypatch.setattr(app_settings, "loudrr_gateway_api", "")
-        monkeypatch.setattr(app_settings, "twitter_api_key", "tapi-fallback")
+        monkeypatch.setattr(app_settings, "gateway_base_url", "https://gateway.loudrr.com")
 
         client = TwitterClient()
-        assert client.base_url == "https://api.twitterapi.io/twitter"
-        assert client.api_key == "tapi-fallback"
+        assert client.base_url == "https://gateway.loudrr.com/twitter"
+        assert client.api_key == ""
+        # sanity: no path anywhere should ever pick api.twitterapi.io
+        assert "twitterapi.io" not in client.base_url
 
     def test_explicit_api_key_argument_wins(self, monkeypatch):
         """A test/injection-time api_key argument must beat the resolved default
-        (both gateway and legacy paths) — preserves pre-gateway behavior."""
+        — preserves the ability to inject test keys / mock clients."""
         from app.core.config import settings as app_settings
         monkeypatch.setattr(app_settings, "loudrr_gateway_api", "gw-key")
 
         client = TwitterClient(api_key="explicit-override")
-        # base_url still resolves to gateway (gateway_api set), but key wins
         assert client.base_url == "https://gateway.loudrr.com/twitter"
         assert client.api_key == "explicit-override"
 

@@ -100,7 +100,7 @@ async def test_waitlist_register_queues_event(client, db_session):
     r = await client.post(
         "/waitlist/register/",
         params={"telegram_id": 555},
-        json={"email": "a@b.com", "x_link": "https://x.com/someone"},
+        json={"x_link": "https://x.com/someone"},
     )
     assert r.status_code == 200
     events = await OutboxEventRepository(db_session).list(limit=10)
@@ -277,7 +277,7 @@ async def test_drain_no_webapp_button_when_miniapp_url_unset(
 
     await OutboxService.queue_waitlist_submitted(
         db_session, entry_id=uuid.uuid4(), telegram_id=43,
-        x_username="bob", email="b@x.com",
+        x_username="bob",
     )
     await db_session.commit()
     await outbox.drain(db_session)

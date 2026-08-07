@@ -36,7 +36,7 @@ export default function AdminWaitlistPage() {
     try {
       await adminApi.approveWaitlist(entry.id);
       toast.success('Approved', {
-        description: `@${entry.telegram_username || entry.x_username || entry.email} is now a user.`,
+        description: `@${entry.telegram_username || entry.x_username || entry.id} is now a user.`,
       });
       await load();
     } catch (e) {
@@ -52,7 +52,7 @@ export default function AdminWaitlistPage() {
     try {
       await adminApi.rejectWaitlist(rejectTarget.id, rejectReason);
       toast.success('Rejected', {
-        description: `Entry for ${rejectTarget.email} rejected${rejectReason ? ` (${rejectReason})` : ''}.`,
+        description: `Entry for @${rejectTarget.telegram_username || rejectTarget.x_username || rejectTarget.id} rejected${rejectReason ? ` (${rejectReason})` : ''}.`,
       });
       setRejectTarget(null);
       setRejectReason('');
@@ -92,7 +92,6 @@ export default function AdminWaitlistPage() {
           <table className="w-full text-sm">
             <thead className="bg-[#0d0d0d] text-left text-[11px] uppercase tracking-wide text-zinc-500">
               <tr>
-                <th className="px-4 py-3 font-semibold">Email</th>
                 <th className="px-4 py-3 font-semibold">Telegram</th>
                 <th className="px-4 py-3 font-semibold">X handle</th>
                 <th className="px-4 py-3 font-semibold">Region / Niche</th>
@@ -103,7 +102,6 @@ export default function AdminWaitlistPage() {
             <tbody className="divide-y divide-white/[0.04]">
               {entries.map((e) => (
                 <tr key={e.id} className="bg-[#111] hover:bg-[#161616] transition-colors">
-                  <td className="px-4 py-3 font-mono text-xs text-zinc-300">{e.email}</td>
                   <td className="px-4 py-3">
                     {e.telegram_username ? (
                       <div>
@@ -168,7 +166,7 @@ export default function AdminWaitlistPage() {
       <Modal
         open={!!rejectTarget}
         onClose={() => { setRejectTarget(null); setRejectReason(''); }}
-        title={`Reject @${rejectTarget?.telegram_username || rejectTarget?.x_username || rejectTarget?.email}?`}
+        title={`Reject @${rejectTarget?.telegram_username || rejectTarget?.x_username || 'entry'}?`}
         description="This will mark the waitlist entry rejected and audit-log the action. The applicant won't be re-prompted automatically."
         footer={
           <>
@@ -186,7 +184,7 @@ export default function AdminWaitlistPage() {
         <div className="space-y-3">
           <div className="rounded-lg border border-white/[0.06] bg-[#0a0a0a] p-3 text-xs">
             <div className="grid grid-cols-2 gap-y-1.5 gap-x-4">
-              <span className="text-zinc-500">Email</span><span className="font-mono text-zinc-200">{rejectTarget?.email}</span>
+              <span className="text-zinc-500">Telegram</span><span className="font-mono text-zinc-200">{rejectTarget?.telegram_username ? `@${rejectTarget.telegram_username}` : `#${rejectTarget?.telegram_id ?? '—'}`}</span>
               <span className="text-zinc-500">X handle</span><span className="text-zinc-200">{rejectTarget?.x_username ? `@${rejectTarget.x_username.replace(/^@/, '')}` : '—'}</span>
               <span className="text-zinc-500">Region</span><span className="text-zinc-200">{rejectTarget?.region || '—'}</span>
               <span className="text-zinc-500">Niche</span><span className="text-zinc-200">{rejectTarget?.niche || '—'}</span>

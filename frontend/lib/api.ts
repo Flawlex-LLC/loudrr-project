@@ -482,12 +482,13 @@ export const api = {
     }>('/waitlist/status/'),
 
   /**
-   * Register for waitlist directly from mini app
-   * Requires email + X profile link, optional referral_code
-   * Sends waitlist card to user via Telegram on success
+   * Register for waitlist directly from the mini-app. Telegram-only signup —
+   * telegram_id comes from the signed initData header set by the client
+   * middleware, so it's NOT in the request body. Sends the waitlist card via
+   * Telegram on success.
    */
   registerWaitlist: (
-    email: string, x_link: string, referral_code?: string,
+    x_link: string, referral_code?: string,
     region?: string, niche?: string, other_platforms?: OtherPlatformEntry[]
   ) =>
     apiRequest<{
@@ -497,7 +498,7 @@ export const api = {
     }>('/waitlist/register/', {
       method: 'POST',
       body: JSON.stringify({
-        email, x_link,
+        x_link,
         ...(referral_code && { referral_code }),
         ...(region && { region }),
         ...(niche && { niche }),
@@ -649,7 +650,6 @@ async function adminApiRequest<T>(
 
 export interface PendingWaitlistEntry {
   id: string;
-  email: string;
   telegram_id: number | null;
   telegram_username: string;
   x_username: string;

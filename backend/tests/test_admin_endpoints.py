@@ -137,7 +137,6 @@ async def test_ban_regular_user_forbidden(client, make_user):
 # ---------------------------------------------------------------------------
 async def _make_waitlist_entry(db_session, *, telegram_id: int) -> WaitlistEntry:
     entry = WaitlistEntry(
-        email=f"u{telegram_id}@example.com",
         telegram_id=telegram_id,
         x_username=f"x{telegram_id}",
         referral_code=f"WL{telegram_id:08X}"[:16],

@@ -2,8 +2,8 @@
 Auth uses ?telegram_id= (the debug bypass); the limiter is off in the fixture."""
 
 
-def _body(email="alice@example.com", x_link="https://x.com/alice"):
-    return {"email": email, "x_link": x_link}
+def _body(x_link="https://x.com/alice"):
+    return {"x_link": x_link}
 
 
 async def test_register_ok(client):

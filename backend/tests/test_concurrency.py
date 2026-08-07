@@ -143,7 +143,7 @@ async def test_concurrent_waitlist_register_makes_one_entry(db_session, make_use
     the unique constraint + the race re-query guarantee it (no duplicates)."""
     tg = {"id": 770_001, "username": "u", "first_name": "U"}
     payload = SimpleNamespace(
-        email="dup@example.com", x_link="https://x.com/dupuser",
+        x_link="https://x.com/dupuser",
         region=None, niche=None, other_platforms=[], referral_code=None,
     )
     engine = create_async_engine(TEST_DATABASE_URL)

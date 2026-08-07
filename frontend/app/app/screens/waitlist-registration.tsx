@@ -17,7 +17,6 @@ export function WaitlistRegistrationScreen({
   onSuccess: (data: { x_username: string; referral_code?: string }) => void;
 }) {
   const [step, setStep] = useState(1);
-  const [email, setEmail] = useState('');
   const [xLink, setXLink] = useState('');
   const [region, setRegion] = useState('');
   const [niche, setNiche] = useState('');
@@ -55,7 +54,7 @@ export function WaitlistRegistrationScreen({
   };
 
   const handleSubmit = async () => {
-    if (!email || !xLink || !region || !niche) return;
+    if (!xLink || !region || !niche) return;
 
     setLoading(true);
     setError(null);
@@ -70,7 +69,7 @@ export function WaitlistRegistrationScreen({
         platforms.push({ platform: 'other', username: otherPlatformUsername.trim(), platform_name: otherPlatformName.trim() });
 
       const result = await api.registerWaitlist(
-        email, xLink, referralCode || undefined,
+        xLink, referralCode || undefined,
         region, niche, platforms.length ? platforms : undefined
       );
       if (result.status === 'registered' || result.status === 'already_registered') {
@@ -103,9 +102,9 @@ export function WaitlistRegistrationScreen({
     setStep(s => s - 1);
   };
 
-  const stepTitles = ['Your Details', 'Your Region', 'Your Niche'];
+  const stepTitles = ['Your X Profile', 'Your Region', 'Your Niche'];
   const stepSubtitles = [
-    'Enter your email and X profile to get started.',
+    'Drop your X profile link to get started.',
     'Where are you based?',
     'What best describes your focus?',
   ];
@@ -146,29 +145,9 @@ export function WaitlistRegistrationScreen({
           border: '1px solid rgba(249, 84, 0, 0.15)',
         }}
       >
-        {/* ---- STEP 1: Email + X Profile ---- */}
+        {/* ---- STEP 1: X Profile ---- */}
         {step === 1 && (
           <>
-            {/* Email Input */}
-            <div className="mb-4">
-              <label className="text-sm text-gray-400 mb-1.5 block">Email</label>
-              <div className="flex items-center gap-3">
-                <div className="glass-icon glass-icon-md glass-icon-orange pointer-events-none">
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                  </svg>
-                </div>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="your@email.com"
-                  className="flex-1 px-4 py-3 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#f95400]/50 text-sm"
-                  style={inputStyle}
-                />
-              </div>
-            </div>
-
             {/* X Profile Input */}
             <div className="mb-5">
               <label className="text-sm text-gray-400 mb-1.5 block">X Profile</label>
@@ -190,7 +169,7 @@ export function WaitlistRegistrationScreen({
             {/* Next Button */}
             <button
               onClick={nextStep}
-              disabled={!email || !xLink}
+              disabled={!xLink}
               className="w-full h-12 rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
               style={{
                 background: 'linear-gradient(135deg, rgba(249, 84, 0, 0.2) 0%, rgba(255, 140, 66, 0.15) 50%, rgba(249, 84, 0, 0.18) 100%)',

@@ -87,10 +87,7 @@ async def register_entry(db, *, tg_user: dict, payload) -> RegisterResult:
     if existing:
         return RegisterResult(entry=existing, was_new=False)
 
-    email = payload.email.lower()
     xu = x_username.lower()
-    if await waitlist.exists(email=email):
-        raise BadRequest("Email already registered")
     # case-insensitive checks need a raw filter, not filter_by
     if await waitlist.exists_where(func.lower(WaitlistEntry.x_username) == xu):
         raise BadRequest("X username already registered")
@@ -103,7 +100,6 @@ async def register_entry(db, *, tg_user: dict, payload) -> RegisterResult:
 
     try:
         entry = await waitlist.create(
-            email=email,
             telegram_id=telegram_id,
             telegram_username=tg_user.get("username", "") or "",
             telegram_display_name=tg_user.get("first_name", "") or "",
@@ -124,8 +120,8 @@ async def register_entry(db, *, tg_user: dict, payload) -> RegisterResult:
     except Conflict:
         # the telegram_id race: another request inserted the same id between
         # our pre-check and this INSERT. Re-query and return that row as a
-        # success (the email/x_username 400s already fired above, so a
-        # Conflict here can only be the telegram_id clash).
+        # success (the x_username 400 already fired above, so a Conflict
+        # here can only be the telegram_id clash).
         race = await waitlist.get(telegram_id=telegram_id)
         if race is not None:
             return RegisterResult(entry=race, was_new=False)
@@ -135,7 +131,7 @@ async def register_entry(db, *, tg_user: dict, payload) -> RegisterResult:
     from app.services.outbox import OutboxService
     await OutboxService.queue_waitlist_submitted(
         db, entry_id=entry.id, telegram_id=entry.telegram_id,
-        x_username=entry.x_username, email=entry.email,
+        x_username=entry.x_username,
     )
     await db.commit()
     logger.info("waitlist entry created: %s", entry.id)

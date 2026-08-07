@@ -150,7 +150,7 @@ class UserAdmin(ModelView, model=User):
 class WaitlistAdmin(ModelView, model=WaitlistEntry):
     name_plural = "Waitlist Entries"
     column_list = [
-        WaitlistEntry.id, WaitlistEntry.email, WaitlistEntry.x_username,
+        WaitlistEntry.id, WaitlistEntry.telegram_username, WaitlistEntry.x_username,
         WaitlistEntry.status, WaitlistEntry.created_at,
     ]
     # read-only: approve/reject via the actions below so a User row is created

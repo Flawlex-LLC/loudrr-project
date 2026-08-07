@@ -162,8 +162,12 @@ async def readyz(db=Depends(get_session)):
         try:
             import redis.asyncio as aioredis  # type: ignore[import-untyped]
 
+            # 5s connect + 3s op — 2s was tripping when Docker was cold-starting
+            # (Redis was healthy on PING from the shell but the async client's
+            # first connect attempt hit the ceiling). Still small enough that a
+            # real outage flips the probe to 503 within one Coolify health check.
             client = aioredis.from_url(
-                settings.redis_url, socket_timeout=2, socket_connect_timeout=2
+                settings.redis_url, socket_timeout=3, socket_connect_timeout=5
             )
             await client.ping()
             await client.aclose()

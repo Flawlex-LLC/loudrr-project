@@ -38,11 +38,14 @@ class OutboxService:
         )
 
     @staticmethod
-    async def queue_waitlist_submitted(db, *, entry_id, telegram_id, x_username, email="") -> OutboxEvent:
+    async def queue_waitlist_submitted(db, *, entry_id, telegram_id, x_username) -> OutboxEvent:
+        # No email — Telegram-only signup (2026-08-07). Existing PENDING events
+        # from before the removal may still have an "email" key in their JSON
+        # payload; the dispatch handler ignores unknown keys, so they drain OK.
         return await OutboxService.queue(
             db, OutboxEventType.WAITLIST_SUBMITTED.value,
             {"entry_id": str(entry_id), "telegram_id": telegram_id,
-             "x_username": x_username, "email": email},
+             "x_username": x_username},
         )
 
     @staticmethod

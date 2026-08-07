@@ -35,20 +35,11 @@ def test_extract_x_username_rejects_hostile(bad):
 
 
 # ---- waitlist register endpoint: malformed body is a 422, never a 500 ----
-async def test_register_malformed_email_422(client):
-    r = await client.post(
-        "/waitlist/register/",
-        params={"telegram_id": 9_500_001},
-        json={"email": "not-an-email", "x_link": "https://x.com/someone"},
-    )
-    assert r.status_code == 422
-
-
 async def test_register_missing_x_link_422(client):
     r = await client.post(
         "/waitlist/register/",
         params={"telegram_id": 9_500_002},
-        json={"email": "ok@example.com"},
+        json={},  # x_link is now the only required field
     )
     assert r.status_code == 422
 
@@ -56,7 +47,6 @@ async def test_register_missing_x_link_422(client):
 # ---- service caps / normalizes what it stores ----
 async def test_other_platforms_capped_at_five(db_session):
     payload = SimpleNamespace(
-        email="capme@example.com",
         x_link="https://x.com/capuser",
         region=None,
         niche=None,
@@ -72,26 +62,10 @@ async def test_other_platforms_capped_at_five(db_session):
     assert len(result.entry.other_platforms) == 5  # 7 submitted, stored 5
 
 
-async def test_email_is_normalized_to_lowercase(db_session):
-    payload = SimpleNamespace(
-        email="MixedCase@Example.COM",
-        x_link="https://x.com/caseuser",
-        region=None,
-        niche=None,
-        referral_code=None,
-        other_platforms=[],
-    )
-    result = await waitlist_svc.register_entry(
-        db_session, tg_user={"id": 9_500_004}, payload=payload
-    )
-    assert result.entry.email == "mixedcase@example.com"
-
-
 async def test_large_telegram_id_is_accepted(db_session):
     """Telegram IDs are 64-bit — a value past 32-bit must store fine (BigInteger)."""
     big = 8_888_888_888  # > 2**32
     payload = SimpleNamespace(
-        email="big@example.com",
         x_link="https://x.com/biguser",
         region=None,
         niche=None,

@@ -202,7 +202,6 @@ async def list_pending_waitlist(
     return [
         {
             "id": str(e.id),
-            "email": e.email,
             "telegram_id": e.telegram_id,
             "telegram_username": e.telegram_username,
             "x_username": e.x_username,

@@ -193,7 +193,6 @@ async def test_waitlist_status_must_be_valid(db_session):
     async with violates(db_session):
         db_session.add(
             WaitlistEntry(
-                email="x@example.com",
                 telegram_id=999_001,
                 x_username="someone",
                 referral_code="WLCODE01",

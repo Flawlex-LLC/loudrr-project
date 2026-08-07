@@ -40,10 +40,8 @@ class WaitlistEntry(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, default=uuid.uuid4
     )
-    # identity - the form's three required fields 
-    email: Mapped[str] = mapped_column(
-        String(254), unique=True, index=True
-    )
+    # identity — Telegram-only, no email collection (Ch10, retired 2026-08-07).
+    # email column dropped by alembic migration <hash>_drop_waitlist_email.py.
     telegram_id: Mapped[int | None] = mapped_column(
         BigInteger, unique=True, index=True
     )

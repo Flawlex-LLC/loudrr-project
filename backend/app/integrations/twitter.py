@@ -19,8 +19,23 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://api.twitterapi.io/twitter"
+# Default upstream. The loudrr gateway (gateway_base_url + loudrr_gateway_api)
+# is a drop-in twitterapi.io-compatible service — same /twitter paths, same
+# params, same response shapes, same x-api-key auth (verified 2026-06-18
+# against the analytics service which runs against it). When configured, we
+# route reply verification through us instead of paying twitterapi.io direct.
+_TWITTERAPI_ROOT = "https://api.twitterapi.io"
 _TIMEOUT = httpx.Timeout(30.0)
+
+
+def _resolve_upstream() -> tuple[str, str]:
+    """Return (base_url_with_/twitter_suffix, api_key) — prefers the loudrr
+    gateway when configured, else falls back to api.twitterapi.io. Read at
+    request time (not module import) so a settings change in tests / a
+    monkeypatch doesn't need a re-import."""
+    if settings.loudrr_gateway_api:
+        return (f"{settings.gateway_base_url.rstrip('/')}/twitter", settings.loudrr_gateway_api)
+    return (f"{_TWITTERAPI_ROOT}/twitter", settings.twitter_api_key)
 
 _TWEET_ID_PATTERNS = [
     re.compile(r"(?:twitter\.com|x\.com)/\w+/status/(\d+)"),
@@ -41,7 +56,11 @@ def extract_tweet_id(url: str) -> Optional[str]:
 
 class TwitterClient:
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key if api_key is not None else settings.twitter_api_key
+        base_url, resolved_key = _resolve_upstream()
+        self.base_url = base_url
+        # explicit api_key argument (tests / injection) always wins over the
+        # resolved default from settings, matching the pre-gateway behavior.
+        self.api_key = api_key if api_key is not None else resolved_key
 
     def _headers(self) -> dict:
         return {"X-API-Key": self.api_key}
@@ -77,7 +96,7 @@ class TwitterClient:
             try:
                 async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                     resp = await client.get(
-                        f"{BASE_URL}/tweet/advanced_search",
+                        f"{self.base_url}/tweet/advanced_search",
                         headers=self._headers(),
                         params={"query": f"from:{username} conversation_id:{tweet_id}"},
                     )
@@ -137,7 +156,7 @@ class TwitterClient:
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 resp = await client.get(
-                    f"{BASE_URL}/tweets", headers=self._headers(),
+                    f"{self.base_url}/tweets", headers=self._headers(),
                     params={"tweet_ids": tweet_id},
                 )
                 resp.raise_for_status()

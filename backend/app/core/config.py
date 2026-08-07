@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     tweetscout_api_key: str = ""
     twitter_api_key: str = ""
 
+    # Loudrr gateway — our own drop-in twitterapi.io-compatible service that
+    # fronts twitterapi.io through gateway.loudrr.com (same /twitter paths,
+    # same params, same response shapes, same x-api-key auth — the analytics
+    # service already runs against it, verified 2026-06-18). When
+    # loudrr_gateway_api is set, reply verification routes through us; when
+    # blank it falls back to api.twitterapi.io using twitter_api_key.
+    # gateway_base_url is the host root (WITHOUT the trailing /twitter path
+    # segment — twitter.py appends it).
+    loudrr_gateway_api: str = ""
+    gateway_base_url: str = "https://gateway.loudrr.com"
+
     # Creator score source: "loudrr" (OUR own influence graph, the loudrr-analytics-service — the
     # data backing; stops paying TweetScout) or "tweetscout" (legacy paid). The Loudrr Score is
     # 0-6000 but tiers top out at 1000 (GOAT), so it's fed straight into tier_for with no rescale.

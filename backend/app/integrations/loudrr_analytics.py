@@ -1,19 +1,19 @@
-"""Loudrr Analytics client — a user's Loudrr Score + X profile from OUR OWN influence graph
-(the loudrr-analytics-service), a drop-in replacement for the paid TweetScout client.
+"""Loudrr Analytics client — the ONLY score provider.
 
-Why: the creator app should run on our own data — it stops paying a competitor for scores and it
-is the "data backing" that makes creator tiers trustworthy. This mirrors ``TweetScoutClient``'s
-interface exactly (``get_user_data(username) -> flat dict with a ``score`` key, or None``) so the
-swap in ``services/users.py`` is one line and fully reversible via ``settings.score_source``.
+A user's Loudrr Score + X profile comes from OUR OWN influence graph
+(the loudrr-analytics-service). We deliberately do NOT fall back to any
+external paid service; if the analytics service is down / unset, the client
+returns None and callers degrade gracefully to "default score, retry later"
+(never a 500, never a punitive zero for the user).
 
-Scale note: the Loudrr Score is 0-6000 (Sorsa-grade), but the tier thresholds top out at 1000
-(GOAT) — anyone above 1000 is top tier, which is the intended behavior (most established creators
-are top tier; the tiers differentiate the 0-1000 band). So the score is fed straight into
-``tier.tier_for`` with NO rescaling.
+Scale note: the Loudrr Score is 0-6000, but the tier thresholds top out at
+1000 (GOAT) — anyone above 1000 is top tier, which is the intended behavior
+(most established creators are top tier; the tiers differentiate the 0-1000
+band). So the score is fed straight into ``tier.tier_for`` with NO rescaling.
 
-Failure policy matches TweetScout's: any timeout / non-200 / not-found returns ``None`` (never
-raises) so a hiccup in the analytics service degrades to "default score, retry later", never a 500.
-The /v1/profile endpoint is public + keyless (the marketing-funnel score), so no API key is needed.
+Failure policy: any timeout / non-200 / not-found returns ``None`` (never
+raises). The /v1/profile endpoint is public + keyless (the marketing-funnel
+score), so no API key is needed.
 """
 import logging
 from typing import Optional
@@ -83,10 +83,8 @@ def get_loudrr_client() -> LoudrrAnalyticsClient:
 
 
 def get_score_client():
-    """The configured score provider. Default = our own Loudrr graph; set
-    ``settings.score_source = "tweetscout"`` to fall back to the legacy paid client instantly
-    (both expose the same ``get_user_data(username)`` contract)."""
-    if (getattr(settings, "score_source", "loudrr") or "loudrr").lower() == "tweetscout":
-        from app.integrations.tweetscout import get_tweetscout_client
-        return get_tweetscout_client()
+    """The score provider — always the Loudrr analytics graph. Kept as a
+    separate factory (rather than inlining LoudrrAnalyticsClient at call
+    sites) so tests can monkeypatch this ONE symbol to inject a fake
+    provider without having to reach into the analytics module internals."""
     return get_loudrr_client()

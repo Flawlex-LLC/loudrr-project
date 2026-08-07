@@ -38,26 +38,17 @@ class Settings(BaseSettings):
     use_task_queue: bool = False
 
     # --- External services (Ch10/11/13/15) ---
-    # TweetScout: legacy clout score (Ch10, retired — see loudrr_analytics).
-    tweetscout_api_key: str = ""
-
-    # Loudrr gateway — our own drop-in twitterapi.io-compatible service that
-    # fronts twitterapi.io through gateway.loudrr.com (same /twitter paths,
-    # same params, same response shapes, same x-api-key auth). This is the
-    # ONLY upstream for reply verification (Ch13) — we intentionally do NOT
-    # fall back to api.twitterapi.io direct; if the gateway isn't configured,
-    # verification returns the benefit-of-the-doubt "skipped+passed" result
-    # (users are never punished for our infra being down — spec §0 #8, §5.2).
-    # gateway_base_url is the host root; twitter.py appends /twitter.
+    # Loudrr gateway (Ch13 reply verification). Our own drop-in twitterapi.io-
+    # compatible service — the ONLY upstream. No fallback to twitterapi.io.
+    # If loudrr_gateway_api is blank, verify_reply returns the benefit-of-the-
+    # doubt "skipped+passed" result (spec §0 #8, §5.2).
     loudrr_gateway_api: str = ""
     gateway_base_url: str = "https://gateway.loudrr.com"
 
-    # Creator score source: "loudrr" (OUR own influence graph, the loudrr-analytics-service — the
-    # data backing; stops paying TweetScout) or "tweetscout" (legacy paid). The Loudrr Score is
-    # 0-6000 but tiers top out at 1000 (GOAT), so it's fed straight into tier_for with no rescale.
-    score_source: str = "loudrr"
-    # Base URL of the loudrr-analytics-service (its keyless /v1/profile). Required when
-    # score_source="loudrr"; empty -> graceful "default score, retry later" (like a missing API key).
+    # Base URL of the loudrr-analytics-service (its keyless /v1/profile). This
+    # is the ONLY score provider — no TweetScout fallback exists. Empty ->
+    # graceful "default score, retry later" (users are never punished for our
+    # infra being down; scores just return None and callers use the default).
     loudrr_analytics_url: str = ""
 
     # --- X OAuth 2.0 (Ch11) ---

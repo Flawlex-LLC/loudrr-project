@@ -1,0 +1,40 @@
+# Web / API
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# HTTP client (twitterapi.io + sorsa + coingecko)
+httpx==0.28.1
+# Async leaky-bucket rate limiter for the paid-API crawl (MIT) — researched pick
+aiolimiter==1.2.1
+
+# Storage
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0          # Postgres driver (graph/serving at scale)
+aiosqlite==0.20.0       # SQLite driver (light, default for the one-shot harvest)
+alembic==1.14.0
+redis==5.2.1
+
+# Scoring engine
+networkx==3.4.2
+
+# Parity calibration (fit our score to harvested TweetScout/Sorsa ground truth)
+numpy==2.2.1
+scipy==1.15.0
+scikit-learn==1.6.0
+
+# Kaito mindshare scrape (docs/kaito_reverse_engineering.md)
+# Camoufox = stealth Firefox that solves Cloudflare; playwright PINNED to 1.50.0 (camoufox v135
+# Juggler rejects newer playwright's viewport.isMobile). curl_cffi for bundle recon / TLS impersonation.
+camoufox[geoip]==0.4.11
+playwright==1.50.0
+curl_cffi==0.15.0
+
+# Tooling
+python-dotenv==1.0.1
+tenacity==9.0.0
+
+# Dev / test
+pytest==8.3.4
+pytest-asyncio==0.25.0

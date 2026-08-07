@@ -1,0 +1,35 @@
+# secrets — NEVER commit these
+.env
+
+# the virtual environment — it's huge and machine-specific
+.venv/
+
+# the database file — it's data, not code
+*.db
+
+# Python's compiled cache
+__pycache__/
+*.pyc
+
+# editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+.env.local
+test.py
+
+# frontend (Next.js) — monorepo
+node_modules/
+.next/
+frontend/.env*.local
+*.tsbuildinfo
+# coverage + transient scan outputs
+backend/.coverage
+*.coverage
+mypy_output.txt
+zap-scan-output.txt
+*zap-scan-output.txt
+
+# the coming-soon landing is its own git repo deployed independently
+# via Vercel from Flawlex-LLC/loudrr-core@landing — don't track it here
+coming-soon/

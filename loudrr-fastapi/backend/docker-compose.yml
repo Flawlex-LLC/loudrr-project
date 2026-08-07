@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: loudrr
+      POSTGRES_PASSWORD: loudrr
+      POSTGRES_DB: loudrr
+    ports:
+      - "5432:5432"
+    volumes:
+      - loudrr_db:/var/lib/postgresql/data
+      
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False" #local only
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - db
+
+volumes:
+  loudrr_db:
+  pgadmin_data:
+

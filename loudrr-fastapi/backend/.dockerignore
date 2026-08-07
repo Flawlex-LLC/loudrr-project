@@ -1,0 +1,48 @@
+# Keep the image small + secrets out
+
+# Python build / cache artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Virtualenvs (the image builds its own /opt/venv)
+.venv/
+venv/
+
+# Secrets — these MUST come from runtime env / Coolify secrets, never the image
+.env
+.env.*
+!.env.example
+
+# Tests — not needed at runtime. Save ~5MB + the test-only deps don't ship.
+tests/
+
+# Local dev cruft
+*.log
+*.db
+.coverage
+mypy_output.txt
+zap-scan-output.txt
+
+# IDE / editor metadata
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Git history
+.git/
+.gitignore
+
+# Docker meta itself
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml

@@ -1,0 +1,39 @@
+# Secrets — NEVER commit
+.env
+*.env
+!.env.example
+
+# Local data / DB (lives in Postgres on the server, not in the repo).
+# EXCEPTION: the score calibration is versioned config the live API needs (loudrr_score.py
+# reads the knots to score on-demand lookups on the same curve as ranked_accounts).
+data/*
+!data/loudrr_calibration.json
+!data/loudrr_calibration_knots.json
+*.db
+*.sqlite
+*.sqlite3
+backup/
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+web/node_modules/
+web/.next/
+web/.env.local

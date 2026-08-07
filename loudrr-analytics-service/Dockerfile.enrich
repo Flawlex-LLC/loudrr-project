@@ -1,0 +1,8 @@
+# Slim one-shot image: finish KOL-call extraction + DexScreener token enrichment on the SERVER
+# (internal DB, no proxy). Same reliable minimal-deps build as Dockerfile.scrape.
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/app
+RUN pip install --no-cache-dir httpx==0.28.1 "sqlalchemy[asyncio]==2.0.36" asyncpg==0.30.0 python-dotenv==1.0.1 pydantic==2.10.4 pydantic-settings==2.7.1 aiolimiter==1.2.1
+COPY . .
+CMD ["python", "-m", "scripts.enrich_prod"]

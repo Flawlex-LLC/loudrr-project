@@ -1,0 +1,25 @@
+# Slim image for the HISTORICAL engagement backfill one-shot (founder-approved ~$4.9k,
+# 2026-07-07). Same rationale as Dockerfile.scrape: full requirements.txt (scipy/numpy)
+# makes fresh builds flaky on this host; the backfill needs only HTTP + async Postgres +
+# the gateway client's retry/pacing deps. Pinned to match requirements.txt.
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
+
+RUN pip install --no-cache-dir \
+    httpx==0.28.1 \
+    "sqlalchemy[asyncio]==2.0.36" \
+    asyncpg==0.30.0 \
+    python-dotenv==1.0.1 \
+    pydantic==2.10.4 \
+    pydantic-settings==2.7.1 \
+    aiolimiter==1.2.1 \
+    tenacity==9.0.0
+
+COPY . .
+
+# walk every panel member's timeline back to the full heatmap year, then exit 0
+CMD ["python", "-m", "scripts.backfill_engagement"]

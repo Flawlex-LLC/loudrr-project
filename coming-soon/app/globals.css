@@ -1,0 +1,33 @@
+@import "tailwindcss";
+@import "@radix-ui/colors/orange.css";
+@import "@radix-ui/colors/orange-dark.css";
+
+:root {
+  --surface-0: #0A0A0A;
+  --brand-primary: #f95400;
+  --brand-glow: rgba(249, 84, 0, 0.15);
+  --background: var(--surface-0);
+  --foreground: #ffffff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-plus-jakarta: var(--font-plus-jakarta);
+  --font-syne: var(--font-syne);
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-plus-jakarta), system-ui, sans-serif;
+}
+
+.font-syne {
+  font-family: var(--font-syne), system-ui, sans-serif;
+}

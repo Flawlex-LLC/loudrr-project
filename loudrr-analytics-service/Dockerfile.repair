@@ -1,0 +1,28 @@
+# Slim image for the crawl AUDIT + REPAIR one-shot.
+#
+# Runs SERVER-SIDE against the internal Postgres. The first attempt ran from a laptop over the
+# public DB proxy and died with a socket timeout: a 289M-row aggregate plus ~98k gateway calls
+# is not something to stream over a home connection. Same rationale as Dockerfile.scrape —
+# install only what this job needs (HTTP + async Postgres + the client's retry/pacing deps)
+# so the build is small and reliable.
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
+
+RUN pip install --no-cache-dir \
+    httpx==0.28.1 \
+    "sqlalchemy[asyncio]==2.0.36" \
+    asyncpg==0.30.0 \
+    python-dotenv==1.0.1 \
+    pydantic==2.10.4 \
+    pydantic-settings==2.7.1 \
+    aiolimiter==1.2.1 \
+    tenacity==9.0.0
+
+COPY . .
+
+# audit every member against their real following count, then re-crawl the truncated ones
+CMD ["python", "-m", "scripts.repair_crawl2", "--with-unknowns"]

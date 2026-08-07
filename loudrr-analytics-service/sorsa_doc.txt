@@ -1,0 +1,863 @@
+================================================================================
+SORSA.IO API v3 - COMPLETE DOCUMENTATION (LLM-READABLE)
+================================================================================
+
+Base URL: https://api.sorsa.io/v3
+Version: 3.0
+Protocol: OpenAPI 3.0.3
+
+================================================================================
+AUTHENTICATION
+================================================================================
+
+Type: API Key
+Header name: ApiKey
+Passed in: header
+
+Example:
+  curl -H "ApiKey: YOUR_API_KEY" https://api.sorsa.io/v3/info?username=elonmusk
+
+All endpoints require authentication via the ApiKey header.
+
+================================================================================
+COMMON ERROR CODES (apply to all endpoints)
+================================================================================
+
+200 - OK (successful request)
+400 - Bad Request (invalid parameters)
+401 - Unauthorized (missing or invalid API key)
+403 - Forbidden (access denied)
+404 - Not Found (resource not found)
+429 - Too Many Requests (rate limit exceeded)
+500 - Internal Server Error
+
+Error response format:
+{
+  "message": "string"  // error description
+}
+
+================================================================================
+DATA MODELS (shared response structures)
+================================================================================
+
+--- User (full user profile) ---
+{
+  "id": "44196397",                    // string - unique Twitter/X user ID
+  "username": "elonmusk",              // string - handle without @
+  "display_name": "Elon Musk",         // string - display name
+  "description": "Bio text",           // string - profile bio text
+  "location": "Austin, TX",            // string - location from profile
+  "profile_image_url": "https://pbs.twimg.com/profile_images/123/photo.jpg",  // string - avatar URL
+  "profile_background_image_url": "https://pbs.twimg.com/profile_banners/44196397/123",  // string - banner URL
+  "followers_count": 100000,           // integer - number of followers
+  "followings_count": 500,             // integer - number of accounts followed
+  "tweets_count": 5000,                // integer - total tweets posted
+  "favourites_count": 1200,            // integer - total tweets liked
+  "media_count": 300,                  // integer - total media items posted
+  "verified": true,                    // boolean - has verified badge
+  "protected": false,                  // boolean - account is private
+  "can_dm": false,                     // boolean - accepts direct messages
+  "possibly_sensitive": false,          // boolean - flagged as sensitive content
+  "created_at": "2009-06-02T20:12:29Z", // string (ISO 8601) - account creation date
+  "bio_urls": ["https://example.com"],  // array of strings - URLs found in bio
+  "pinned_tweet_ids": ["123456789"]     // array of strings - IDs of pinned tweets
+}
+
+--- CommunityUser (compact community member profile) ---
+{
+  "id": "44196397",                    // string - unique Twitter/X user ID
+  "username": "elonmusk",              // string - handle without @
+  "display_name": "Elon Musk",         // string - display name
+  "profile_image_url": "https://pbs.twimg.com/profile_images/123/photo.jpg",  // string - avatar URL
+  "verified": true,                    // boolean - has verified badge
+  "protected": false                   // boolean - account is private
+}
+
+--- Follower (user profile with follow date) ---
+{
+  // All fields from User (except location), plus:
+  "id": "44196397",
+  "username": "elonmusk",
+  "display_name": "Elon Musk",
+  "description": "Bio text",
+  "profile_image_url": "https://pbs.twimg.com/profile_images/123/photo.jpg",
+  "profile_background_image_url": "https://pbs.twimg.com/profile_banners/44196397/123",
+  "followers_count": 100000,
+  "followings_count": 500,
+  "tweets_count": 5000,
+  "favourites_count": 1200,
+  "media_count": 300,
+  "verified": true,
+  "protected": false,
+  "can_dm": false,
+  "possibly_sensitive": false,
+  "created_at": "2009-06-02T20:12:29Z",
+  "bio_urls": ["https://example.com"],
+  "pinned_tweet_ids": ["123456789"],
+  "followerDate": "2024-01-15T10:30:00Z"  // string (ISO 8601) - date when the follow started
+}
+
+--- Tweet (full tweet data) ---
+{
+  "id": "1782368585664626774",         // string - unique tweet ID
+  "full_text": "Hello world",           // string - full text content
+  "created_at": "2024-01-15T10:30:00Z", // string (ISO 8601) - publication date
+  "lang": "en",                         // string - detected language code (en, es, ru, etc.)
+  "conversation_id_str": "1782368585664626774",  // string - root tweet ID in the thread
+  "likes_count": 200,                   // integer - number of likes
+  "retweet_count": 50,                  // integer - number of retweets
+  "reply_count": 10,                    // integer - number of replies
+  "quote_count": 5,                     // integer - number of quote tweets
+  "view_count": 10000,                  // integer - number of views (impressions)
+  "bookmark_count": 15,                 // integer - number of bookmarks
+  "is_reply": false,                    // boolean - whether this is a reply
+  "is_quote_status": false,             // boolean - whether this quotes another tweet
+  "is_replies_limited": false,          // boolean - whether replies are restricted by the author
+  "in_reply_to_tweet_id": "1782368585664626000",  // string|null - ID of the tweet being replied to
+  "in_reply_to_username": "username",   // string|null - username of the original tweet author
+  "user": { ... },                      // User - tweet author (full User structure)
+  "entities": [                         // array - media and links attached to the tweet
+    {
+      "type": "photo",                  // string - entity type: "photo", "video", "url"
+      "link": "https://t.co/example",   // string - direct URL
+      "preview": "https://pbs.twimg.com/preview"  // string - preview/thumbnail URL
+    }
+  ],
+  "quoted_status": { ... },             // Tweet|null - quoted tweet (present only if is_quote_status=true)
+  "retweeted_status": { ... }           // Tweet|null - retweeted tweet (present only for retweets)
+}
+
+--- TweetsResponse (paginated tweet list) ---
+{
+  "tweets": [ { Tweet }, { Tweet }, ... ],  // array of Tweet
+  "next_cursor": "string"                   // string|null - cursor for the next page
+}
+
+--- TweetsBulkResponse (bulk tweet response, no pagination) ---
+{
+  "tweets": [ { Tweet }, { Tweet }, ... ]   // array of Tweet
+}
+
+--- UsersResponse (paginated user list) ---
+{
+  "users": [ { User }, { User }, ... ],     // array of User
+  "next_cursor": "string"                   // string|null - cursor for the next page
+}
+
+--- CommunityUsersResponse (paginated community member list) ---
+{
+  "users": [ { CommunityUser }, ... ],      // array of CommunityUser
+  "next_cursor": "string"                   // string|null - cursor for the next page
+}
+
+--- FollowersResponse (follower list with follow dates) ---
+{
+  "users": [ { Follower }, { Follower }, ... ]  // array of Follower
+}
+
+
+================================================================================
+SECTION 1: USERS DATA
+================================================================================
+
+--------------------------------------------------------------------------------
+1.1 GET /info - User Profile
+--------------------------------------------------------------------------------
+Description: Returns the public profile of a Twitter/X account.
+
+Query parameters (provide exactly one of three):
+  user_link  - string - full profile URL (e.g. https://twitter.com/elonmusk)
+  username   - string - handle without @ (e.g. elonmusk)
+  user_id    - string - numeric Twitter/X user ID (e.g. 44196397)
+
+Response 200:
+  User (full User structure, see above)
+
+Example request:
+  GET /info?username=elonmusk
+
+Example response:
+{
+  "id": "44196397",
+  "username": "elonmusk",
+  "display_name": "Elon Musk",
+  "description": "Bio text",
+  "location": "Austin, TX",
+  "profile_image_url": "https://pbs.twimg.com/profile_images/123/photo.jpg",
+  "profile_background_image_url": "https://pbs.twimg.com/profile_banners/44196397/123",
+  "followers_count": 100000,
+  "followings_count": 500,
+  "tweets_count": 5000,
+  "favourites_count": 1200,
+  "media_count": 300,
+  "verified": true,
+  "protected": false,
+  "can_dm": false,
+  "possibly_sensitive": false,
+  "created_at": "2009-06-02T20:12:29Z",
+  "bio_urls": [],
+  "pinned_tweet_ids": []
+}
+
+--------------------------------------------------------------------------------
+1.2 GET /info-batch - User Profile (Batch)
+--------------------------------------------------------------------------------
+Description: Returns profiles for multiple accounts in a single request. Up to 100 accounts.
+
+Query parameters (provide one of two):
+  usernames  - array of string - array of handles without @
+  user_ids   - array of string - array of numeric user IDs
+
+Response 200:
+{
+  "users": [ { User }, { User }, ... ]   // array of User
+}
+
+Example request:
+  GET /info-batch?usernames=elonmusk&usernames=jack
+
+--------------------------------------------------------------------------------
+1.3 GET /about - Account About Info
+--------------------------------------------------------------------------------
+Description: Returns metadata from the "About" section: country, total username
+changes, and date of the most recent change.
+
+Query parameters (provide exactly one of three):
+  user_link  - string - full profile URL
+  username   - string - handle without @
+  user_id    - string - numeric user ID
+
+Response 200:
+{
+  "country": "United States",                    // string - country associated with the account
+  "username_change_count": 1,                    // integer - total username changes
+  "last_username_change_at": "2021-01-01T00:00:00Z"  // string (ISO 8601) - date of last change
+}
+
+--------------------------------------------------------------------------------
+1.4 GET /followers - Followers
+--------------------------------------------------------------------------------
+Description: Paginated list of accounts following the specified user. Up to 200 per page.
+
+Query parameters:
+  user_link   - string - full profile URL (one of three)
+  username    - string - handle without @
+  user_id     - string - numeric user ID
+  next_cursor - integer - pagination cursor from a previous response
+
+Response 200:
+  UsersResponse (see structure above)
+
+--------------------------------------------------------------------------------
+1.5 GET /follows - Following
+--------------------------------------------------------------------------------
+Description: Paginated list of accounts the specified user follows. Up to 200 per page.
+
+Query parameters:
+  user_link   - string - full profile URL (one of three)
+  username    - string - handle without @
+  user_id     - string - numeric user ID
+  next_cursor - integer - pagination cursor from a previous response
+
+Response 200:
+  UsersResponse
+
+--------------------------------------------------------------------------------
+1.6 GET /verified-followers - Verified Followers
+--------------------------------------------------------------------------------
+Description: Paginated list of verified accounts following the specified user.
+
+Query parameters:
+  user_link   - string - full profile URL (one of three)
+  username    - string - handle without @
+  user_id     - string - numeric user ID
+  next_cursor - string - pagination cursor from a previous response
+
+Response 200:
+  UsersResponse
+
+
+================================================================================
+SECTION 2: TWEETS
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 POST /tweet-info - Tweet Data
+--------------------------------------------------------------------------------
+Description: Returns full data for a single tweet by its URL: text, date, metrics,
+author. If the tweet is a reply, quote, or repost, the nested original tweet and
+its author data are included.
+
+Request body (JSON):
+{
+  "tweet_link": "https://x.com/user/status/123"  // string - tweet URL or just the tweet ID
+}
+
+Response 200:
+  Tweet (full Tweet structure, see above)
+
+--------------------------------------------------------------------------------
+2.2 POST /tweet-info-bulk - Tweet Data (Batch)
+--------------------------------------------------------------------------------
+Description: Returns full data for up to 100 tweets in a single request. No pagination.
+
+Request body (JSON):
+{
+  "tweet_links": [                        // array of string - tweet URLs or IDs (up to 100)
+    "https://x.com/user/status/123",
+    "1782368585664626774"
+  ]
+}
+
+Response 200:
+  TweetsBulkResponse:
+{
+  "tweets": [ { Tweet }, { Tweet }, ... ]
+}
+
+--------------------------------------------------------------------------------
+2.3 POST /user-tweets - User Tweets
+--------------------------------------------------------------------------------
+Description: Paginated list of tweets posted by a specific user. Up to 20 per page.
+
+Request body (JSON):
+{
+  "user_link": "https://twitter.com/username",  // string - profile URL (one of three)
+  "username": "username",                        // string - handle
+  "user_id": "123",                              // string - numeric user ID
+  "next_cursor": "ASDJKHFJWQE123Q"              // string (optional) - pagination cursor
+}
+Note: provide exactly one user identifier (user_link, username, or user_id).
+
+Response 200:
+  TweetsResponse
+
+--------------------------------------------------------------------------------
+2.4 POST /comments - Tweet Comments
+--------------------------------------------------------------------------------
+Description: Paginated list of replies (comments) under a tweet. Up to 20 per page.
+
+Request body (JSON):
+{
+  "tweet_link": "https://x.com/user/status/123",  // string - tweet URL or ID (required)
+  "next_cursor": "JKHSJFHADUYJKSDy2y3u123"        // string (optional) - cursor
+}
+
+Response 200:
+  TweetsResponse
+
+--------------------------------------------------------------------------------
+2.5 POST /quotes - Quote Tweets
+--------------------------------------------------------------------------------
+Description: Paginated list of tweets that quoted the specified tweet. Up to 20 per page.
+
+Request body (JSON):
+{
+  "tweet_link": "https://x.com/user/status/123",  // string - tweet URL or ID (required)
+  "next_cursor": "JKHSJFHADUYJKSDy2y3u123"        // string (optional)
+}
+
+Response 200:
+  TweetsResponse
+
+--------------------------------------------------------------------------------
+2.6 POST /retweeters - Retweeters List
+--------------------------------------------------------------------------------
+Description: Paginated list of users who retweeted the tweet (newest first).
+NOTE: the response uses UsersResponse format (users), not tweets.
+
+Request body (JSON):
+{
+  "tweet_link": "https://x.com/user/status/123",  // string - tweet URL or ID (required)
+  "next_cursor": "JKHSJFHADUYJKSDy2y3u123"        // string (optional)
+}
+
+Response 200:
+  UsersResponse
+
+--------------------------------------------------------------------------------
+2.7 POST /article - Article Data (Long-form Post)
+--------------------------------------------------------------------------------
+Description: Returns full data for a Twitter/X Article: text, preview, cover image,
+metrics, and author profile.
+
+Request body (JSON):
+{
+  "tweet_link": "https://x.com/user/status/123"  // string - article URL or tweet ID
+}
+
+Response 200:
+{
+  "full_text": "Complete article text...",         // string - full article text
+  "preview_text": "Short excerpt...",              // string - short preview excerpt
+  "cover_image_url": "https://...",                // string - cover image URL
+  "published_at": "2024-01-15T10:30:00Z",         // string (ISO 8601) - publication date
+  "likes_count": 200,                              // integer
+  "retweet_count": 50,                             // integer
+  "reply_count": 10,                               // integer
+  "quote_count": 5,                                // integer
+  "bookmark_count": 15,                            // integer
+  "views_count": 10000,                            // integer
+  "author": { User }                               // User - article author
+}
+
+
+================================================================================
+SECTION 3: SEARCH
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 POST /search-tweets - Search Tweets
+--------------------------------------------------------------------------------
+Description: Searches for tweets matching a text query. Supports Twitter Advanced
+Search syntax: from:, to:, since:, until:, exact phrases in quotes, hashtags.
+Full list of operators: https://github.com/igorbrigadir/twitter-advanced-search
+Up to 20 results per page.
+
+Request body (JSON):
+{
+  "query": "elonmusk",                       // string (required) - search query
+  "order": "popular",                         // string (optional) - "popular" or "latest"
+  "next_cursor": "JKHSJFHADUYJKSDy2y3u123"  // string (optional)
+}
+
+Response 200:
+  TweetsResponse
+
+--------------------------------------------------------------------------------
+3.2 POST /mentions - Search Mentions
+--------------------------------------------------------------------------------
+Description: Returns tweets mentioning the specified handle. Up to 20 per page.
+Offers the richest filter set among all search endpoints.
+
+Request body (JSON):
+{
+  "query": "elonmusk",                       // string - handle to search mentions for
+  "order": "popular",                         // string (optional) - "popular" or "latest"
+  "min_likes": 100,                           // integer (optional) - minimum likes
+  "min_replies": 100,                         // integer (optional) - minimum replies
+  "min_retweets": 100,                        // integer (optional) - minimum retweets
+  "since_date": "2026-01-01",                // string (optional) - start date (YYYY-MM-DD)
+  "until_date": "2026-01-01",                // string (optional) - end date (YYYY-MM-DD)
+  "next_cursor": "JKHSJFHADUYJKSDy2y3u123"  // string (optional)
+}
+
+Response 200:
+  TweetsResponse
+
+--------------------------------------------------------------------------------
+3.3 POST /search-users - Search Users
+--------------------------------------------------------------------------------
+Description: Searches for Twitter/X accounts by keyword or phrase. Supports pagination.
+
+Request body (JSON):
+{
+  "query": "elonmusk",                       // string (required) - search query
+  "next_cursor": "JKHSJFHADUYJKSDy2y3u123"  // string (optional)
+}
+
+Response 200:
+  UsersResponse
+
+
+================================================================================
+SECTION 4: VERIFICATION
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 POST /check-follow - Check Follow
+--------------------------------------------------------------------------------
+Description: Checks if user_2 follows user_1.
+Logic: "Does Elon Musk (user_2) follow SorsaApp (user_1)?"
+Provide exactly one identifier per side (link, username, or id).
+
+Request body (JSON):
+{
+  "user_link_1": "https://twitter.com/elonmusk",    // string - user_1 profile URL
+  "username_1": "elonmusk",                          // string - user_1 handle
+  "user_id_1": "44196397",                           // string - user_1 ID
+  "user_link_2": "https://twitter.com/elonmusk",    // string - user_2 profile URL
+  "username_2": "elonmusk",                          // string - user_2 handle
+  "user_id_2": "44196397"                            // string - user_2 ID
+}
+
+Response 200:
+{
+  "follow": true,             // boolean - whether user_2 follows user_1
+  "user_protected": false     // boolean - whether the checked user's account is private
+}
+
+--------------------------------------------------------------------------------
+4.2 GET /check-comment - Check Comment
+--------------------------------------------------------------------------------
+Description: Checks whether a user has posted a reply under a given tweet.
+
+Query parameters:
+  tweet_link - string (required) - tweet URL
+  username   - string - handle of the user being checked (one of three)
+  user_link  - string - profile URL
+  user_id    - string - numeric user ID
+
+Response 200:
+{
+  "commented": true,          // boolean - whether the user commented
+  "tweet": { Tweet }          // Tweet|null - reply tweet data (only if commented=true)
+}
+
+--------------------------------------------------------------------------------
+4.3 POST /check-quoted - Check Quote or Retweet
+--------------------------------------------------------------------------------
+Description: Checks whether a user has quoted or retweeted a given tweet.
+
+Request body (JSON):
+{
+  "tweet_link": "https://twitter.com/TweetScout_io/status/1782368585664626774",  // string
+  "username": "elonmusk",     // string (one of three identifiers)
+  "user_link": "https://twitter.com/elonmusk",  // string
+  "user_id": "44196397"       // string
+}
+
+Response 200:
+{
+  "status": "quoted",              // string - "quoted", "retweet", or "not_found"
+  "date": "2024-04-27 06:43:09",  // string|null - interaction date
+  "text": "Quote text",           // string|null - quote text (only if status="quoted")
+  "user_protected": false          // boolean - whether the account is private
+}
+
+--------------------------------------------------------------------------------
+4.4 POST /check-retweet - Check Retweet
+--------------------------------------------------------------------------------
+Description: Checks whether a user has retweeted a tweet. Scans up to 100 retweets
+per request. If there are more, a next_cursor is returned to continue.
+
+Request body (JSON):
+{
+  "tweet_link": "https://...",     // string - tweet URL or ID
+  "username": "elonmusk",          // string (one of three)
+  "user_link": "https://...",      // string
+  "user_id": "44196397",           // string
+  "next_cursor": "..."             // string (optional) - cursor to continue checking
+}
+
+Response 200:
+{
+  "retweet": true,            // boolean - whether the user retweeted
+  "user_protected": false,    // boolean - whether the account is private
+  "next_cursor": "..."        // string|null - cursor to continue checking
+}
+
+--------------------------------------------------------------------------------
+4.5 POST /check-community-member - Check Community Membership
+--------------------------------------------------------------------------------
+Description: Checks whether a user is a member of a given Twitter/X Community.
+
+Request body (JSON):
+{
+  "community_id": "1966045657589813686",  // string (required) - community ID
+  "username": "elonmusk",                  // string (one of three identifiers)
+  "user_link": "https://twitter.com/elonmusk",  // string
+  "user_id": "44196397"                    // string
+}
+
+Response 200:
+{
+  "is_member": true   // boolean - whether the user is a community member
+}
+
+
+================================================================================
+SECTION 5: COMMUNITY
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 POST /community-members - Community Members
+--------------------------------------------------------------------------------
+Description: Paginated list of Twitter/X Community members.
+
+Request body (JSON):
+{
+  "community_link": "1966045657589813686",  // string (required) - community ID or URL
+  "next_cursor": "123"                       // string (optional)
+}
+
+Response 200:
+  CommunityUsersResponse
+
+--------------------------------------------------------------------------------
+5.2 POST /community-tweets - Community Tweets
+--------------------------------------------------------------------------------
+Description: Paginated feed of tweets from a community. Up to 20 per page.
+
+Request body (JSON):
+{
+  "community_id": "1966045657589813686",  // string (required)
+  "order": "popular",                      // string (optional) - "popular" or "latest" (default: "latest")
+  "next_cursor": "123"                     // string (optional)
+}
+
+Response 200:
+  TweetsResponse
+
+--------------------------------------------------------------------------------
+5.3 POST /community-search-tweets - Search Community Tweets
+--------------------------------------------------------------------------------
+Description: Keyword search within a specific community. Up to 20 per page.
+
+Request body (JSON):
+{
+  "community_link": "https://x.com/i/communities/1966045657589813686",  // string (required) - URL or ID
+  "query": "elonmusk",         // string (optional) - search query
+  "order": "popular",          // string (optional) - "popular" or "latest"
+  "next_cursor": "123"         // string (optional)
+}
+
+Response 200:
+  TweetsResponse
+
+
+================================================================================
+SECTION 6: LISTS (Twitter/X Lists)
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 GET /list-members - List Members
+--------------------------------------------------------------------------------
+Description: User profiles for all accounts included in a Twitter/X List.
+
+Query parameters:
+  list_id     - string (required) - numeric list ID
+  next_cursor - integer (optional) - pagination cursor
+
+Response 200:
+  UsersResponse
+
+--------------------------------------------------------------------------------
+6.2 GET /list-followers - List Followers
+--------------------------------------------------------------------------------
+Description: Users subscribed to (following) a Twitter/X List.
+
+Query parameters:
+  list_link   - string (required) - list URL or ID
+  next_cursor - string (optional) - pagination cursor
+
+Response 200:
+  UsersResponse
+
+--------------------------------------------------------------------------------
+6.3 GET /list-tweets - List Tweets
+--------------------------------------------------------------------------------
+Description: Paginated feed of tweets from list members. Up to 20 per page.
+
+Query parameters:
+  list_id     - string (required) - numeric list ID
+  next_cursor - string (optional) - pagination cursor
+
+Response 200:
+  TweetsResponse
+
+
+================================================================================
+SECTION 7: SORSA INFO (Crypto-focused Analytics)
+================================================================================
+
+Note: endpoints in this section work with the Sorsa internal database, which
+primarily indexes crypto-related accounts (influencers, projects, VCs). Results
+may not cover all Twitter/X users.
+
+--------------------------------------------------------------------------------
+7.1 GET /score - Sorsa Score
+--------------------------------------------------------------------------------
+Description: Numeric influence score for a Twitter/X account within the crypto
+ecosystem. Higher values indicate stronger recognition among influencers,
+projects, and VCs. May take longer for accounts with large follower bases.
+
+Query parameters (one of three):
+  user_link  - string
+  username   - string
+  user_id    - string
+
+Response 200:
+{
+  "score": 1.25   // number - numeric influence score
+}
+
+--------------------------------------------------------------------------------
+7.2 GET /score-changes - Sorsa Score Changes
+--------------------------------------------------------------------------------
+Description: Score change over the last 7 and 30 days. Useful for tracking
+momentum and identifying accounts gaining or losing influence.
+
+Query parameters (one of three):
+  user_link  - string
+  username   - string
+  user_id    - string
+
+Response 200:
+{
+  "week_delta": 12,    // number - score change over last 7 days
+  "month_delta": 24    // number - score change over last 30 days
+}
+
+--------------------------------------------------------------------------------
+7.3 GET /followers-stats - Follower Category Stats
+--------------------------------------------------------------------------------
+Description: Breakdown of followers by Sorsa category: influencers, projects, VCs.
+
+Query parameters (one of three):
+  user_link  - string
+  username   - string
+  user_id    - string
+
+Response 200:
+{
+  "followers_count": 16,         // integer - total categorized followers
+  "influencers_count": 12,       // integer - influencers
+  "projects_count": 3,           // integer - projects
+  "venture_capitals_count": 1,   // integer - VC employees
+  "user_protected": false         // boolean - whether the account is private
+}
+
+--------------------------------------------------------------------------------
+7.4 GET /top-followers - Top 20 Followers by Score
+--------------------------------------------------------------------------------
+Description: 20 followers with the highest Sorsa Score. Includes profile data
+and follow date.
+
+Query parameters (one of three):
+  user_link  - string
+  username   - string
+  user_id    - string
+
+Response 200:
+  FollowersResponse
+
+--------------------------------------------------------------------------------
+7.5 GET /top-following - Top 20 Following by Score
+--------------------------------------------------------------------------------
+Description: 20 accounts the user follows with the highest Sorsa Score.
+
+Query parameters (one of three):
+  user_link  - string
+  username   - string
+  user_id    - string
+
+Response 200:
+  FollowersResponse
+
+--------------------------------------------------------------------------------
+7.6 GET /new-followers-7d - New Followers (7 Days)
+--------------------------------------------------------------------------------
+Description: Accounts that started following the user in the last 7 days.
+IMPORTANT: only returns accounts already tracked in the Sorsa database
+(crypto-related). This is NOT a complete list of all new followers.
+
+Query parameters (one of three):
+  user_link  - string
+  username   - string
+  user_id    - string
+
+Response 200:
+  FollowersResponse
+
+--------------------------------------------------------------------------------
+7.7 GET /new-following-7d - New Following (7 Days)
+--------------------------------------------------------------------------------
+Description: Accounts the user started following in the last 7 days.
+IMPORTANT: only returns accounts tracked in the Sorsa database (crypto-related).
+
+Query parameters (one of three):
+  user_link  - string
+  username   - string
+  user_id    - string
+
+Response 200:
+  FollowersResponse
+
+
+================================================================================
+SECTION 8: TECHNICAL ENDPOINTS
+================================================================================
+
+--------------------------------------------------------------------------------
+8.1 GET /username-to-id/{user_handle} - Convert Username to User ID
+--------------------------------------------------------------------------------
+Description: Converts a Twitter/X username into the corresponding stable numeric
+user ID. Unlike usernames, user IDs never change.
+
+Path parameters:
+  user_handle - string (required) - handle without @
+
+Response 200:
+{
+  "id": "1"   // string - numeric user ID
+}
+
+--------------------------------------------------------------------------------
+8.2 GET /id-to-username/{user_id} - Convert User ID to Username
+--------------------------------------------------------------------------------
+Description: Converts a numeric user ID into the account's current username.
+
+Path parameters:
+  user_id - string (required) - numeric user ID
+
+Response 200:
+{
+  "handle": "elonmusk"   // string - current handle without @
+}
+
+--------------------------------------------------------------------------------
+8.3 GET /link-to-id - Convert Profile Link to User ID
+--------------------------------------------------------------------------------
+Description: Extracts the stable numeric user ID from a Twitter/X profile URL.
+
+Query parameters:
+  link - string (required) - full profile URL
+
+Response 200:
+{
+  "id": "44196397"   // string - numeric user ID
+}
+
+--------------------------------------------------------------------------------
+8.4 GET /key-usage-info - API Key Usage
+--------------------------------------------------------------------------------
+Description: Usage statistics for the current API key. No parameters required;
+the key is read from the ApiKey header.
+
+Response 200:
+{
+  "key_requests": 100,                         // integer - requests allocated for current period
+  "remaining_requests": 100,                   // integer - requests remaining
+  "total_requests": 1000,                      // integer - total requests used across all periods
+  "valid_until": "2021-01-01T00:00:00Z"       // string (ISO 8601) - expiration date of request balance
+}
+
+
+================================================================================
+NOTES FOR LLM AGENTS
+================================================================================
+
+1. USER IDENTIFICATION: Most endpoints accept three identification options:
+   user_link (profile URL), username (handle without @), user_id (numeric ID).
+   Always provide exactly ONE of these parameters.
+
+2. PAGINATION: Paginated endpoints return a next_cursor field. If the value is
+   null or absent, there are no more pages. To fetch the next page, pass the
+   received cursor in the next_cursor field of the following request.
+
+3. TWEET_LINK: Fields named tweet_link accept both a full URL
+   (https://x.com/user/status/123) and just the tweet ID ("123").
+
+4. SORSA-SPECIFIC DATA: Endpoints in the "Sorsa Info" section work with the
+   Sorsa internal database focused on the crypto industry. Data may be incomplete
+   for accounts outside the crypto ecosystem. For new or large accounts, the
+   first request may take longer (initial indexing).
+
+5. LIMITS:
+   - Batch requests: up to 100 items (/info-batch, /tweet-info-bulk)
+   - Standard lists: up to 20 items per page (tweets, comments, quotes)
+   - Follower/following lists: up to 200 items per page
+
+6. DATE FORMATS: All dates use ISO 8601 format (e.g. 2024-01-15T10:30:00Z),
+   except since_date/until_date in /mentions (format YYYY-MM-DD).

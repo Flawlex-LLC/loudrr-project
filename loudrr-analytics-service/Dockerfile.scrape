@@ -1,0 +1,24 @@
+# Slim image for the ONE-SHOT TwitterScore category scrape (RUN_MODE-free).
+# The full requirements.txt (scipy/numpy/networkx) makes fresh --no-cache builds flaky on a
+# spotty build host; the scraper only needs an HTTP client + async Postgres, so install just
+# those (pinned to match requirements.txt) for a small, reliable build.
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
+
+RUN pip install --no-cache-dir \
+    httpx==0.28.1 \
+    "sqlalchemy[asyncio]==2.0.36" \
+    asyncpg==0.30.0 \
+    python-dotenv==1.0.1 \
+    pydantic==2.10.4 \
+    pydantic-settings==2.7.1 \
+    aiolimiter==1.2.1
+
+COPY . .
+
+# scrape all tracked handles' TwitterScore categories -> prod, then exit 0
+CMD ["python", "-m", "scripts.scrape_twitterscore_prod"]

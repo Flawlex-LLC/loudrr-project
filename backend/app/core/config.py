@@ -2,7 +2,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # extra="ignore" so a stale variable in .env (e.g. TWITTER_API_KEY left over
+    # after the gateway migration) doesn't crash boot — we log unknown vars once
+    # at import time via env_file so ops can spot them, but they don't gate
+    # startup. Without this, Pydantic-Settings defaults to extra="forbid".
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
     # app wireup
     app_name: str = "Loudrr"
     # debug default to false, can be overridden by .env

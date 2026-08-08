@@ -19,40 +19,40 @@ UI / infra steps only you can do — this doc is the exact tick-through list.
 
 ## What YOU need to do (order matters)
 
-### 1. Coolify — repoint every application (~5 min)
+### 1. Coolify — CREATE the loudrr apps (nothing to "migrate" — no apps exist yet)
 
-Every app's git URL + `base_directory` needs updating. Two options:
+Verified against your live Coolify (`server1.flawlex.co`, 2026-08-08):
+none of the 10 existing applications are for loudrr. So there is no
+"migrate" step — just a first-time deploy. `scripts/coolify-migrate.sh`
+in this repo is now a scaffold you can adapt if you ever need to bulk-repoint
+apps in the future; ignore it for the first deploy.
 
-**A. Scripted (recommended)** — one bash script hits Coolify's API:
-1. Open `scripts/coolify-migrate.sh` in this repo.
-2. In the Coolify UI: **Keys & Tokens** → create a token with **write + deploy**
-   permissions. Copy the `<id>|<secret>` string.
-3. Get every app's UUID by running the script with `--list`:
-   ```bash
-   COOLIFY_HOST=https://your-coolify-host \
-   COOLIFY_TOKEN='<id>|<secret>' \
-   bash scripts/coolify-migrate.sh --list
-   ```
-4. Fill in the `APPS` array in the script with each app's UUID + its new
-   base_directory (comments show the mapping). Uncomment those lines.
-5. Run the script:
-   ```bash
-   COOLIFY_HOST=https://your-coolify-host \
-   COOLIFY_TOKEN='<id>|<secret>' \
-   bash scripts/coolify-migrate.sh
-   ```
-6. Watch each app's **Deployments** tab in the Coolify UI. A failed rebuild
-   leaves the previous container running on the old image, so nothing goes
-   dark until the new build succeeds.
+Follow the same pattern your `raidx-bot` project uses — one repo, multiple
+apps, each with a distinct `base_directory`. In the Coolify UI:
 
-**B. UI (if the script fails)** — per app:
-- **Configuration → General → Source** → change **Repository URL** to
-  `https://github.com/Flawlex-LLC/loudrr-project` → **Save**.
-- **Configuration → Build** → change **Base Directory**:
-  - Backend:  `/loudrr-fastapi/backend`
-  - Frontend: `/loudrr-fastapi/frontend`
-  - Analytics (all RUN_MODE apps): `/loudrr-analytics-service`
-- **Save** → **Deploy → Force Rebuild**.
+1. **New Project** → name it `loudrr` → creates a `production` environment.
+2. For each app below, hit **+ New Resource → Public Repository** (or
+   **Private via GitHub App** if you want push-to-deploy), then fill in:
+
+| App name              | Repository                                      | Branch | Base directory                | Build pack | Port | Notes                                                       |
+| --------------------- | ----------------------------------------------- | ------ | ----------------------------- | ---------- | ---- | ----------------------------------------------------------- |
+| loudrr-backend        | `Flawlex-LLC/loudrr-project`                    | main   | `/loudrr-fastapi/backend`     | dockerfile | 8000 | `/readyz` healthcheck; needs Postgres + Redis, .env vars    |
+| loudrr-worker         | `Flawlex-LLC/loudrr-project`                    | main   | `/loudrr-fastapi/backend`     | dockerfile | —    | `start_command: python -m arq app.tasks.worker.WorkerSettings` |
+| loudrr-frontend       | `Flawlex-LLC/loudrr-project`                    | main   | `/loudrr-fastapi/frontend`    | dockerfile | 3000 | Set `BACKEND_ORIGIN=https://<backend-fqdn>` at build time   |
+| loudrr-analytics-api  | `Flawlex-LLC/loudrr-project`                    | main   | `/loudrr-analytics-service`   | dockerfile | 8001 | Uses the base `Dockerfile`; RUN_MODE=api                    |
+| loudrr-analytics-\*    | `Flawlex-LLC/loudrr-project`                    | main   | `/loudrr-analytics-service`   | dockerfile | —    | One app per crawl mode: backfill / enrich / repair / scrape (each uses a `Dockerfile.<mode>`) |
+
+3. **Watch Paths** (critical in a monorepo — avoids ALL apps redeploying on
+   every commit). Copy the raidx-bot pattern; example values:
+   - loudrr-backend:  `loudrr-fastapi/backend/**` + `loudrr-fastapi/backend/Dockerfile`
+   - loudrr-frontend: `loudrr-fastapi/frontend/**`
+   - loudrr-analytics-*: `loudrr-analytics-service/**`
+4. Set env vars per app (`LOUDRR_ANALYTICS_URL`, `LOUDRR_GATEWAY_API`, `DATABASE_URL`,
+   `REDIS_URL`, `TELEGRAM_BOT_TOKEN`, `SECRET_KEY`, `ADMIN_PASSWORD`, `ENVIRONMENT=prod`,
+   `DEBUG=False`, `SENTRY_DSN` / `GLITCHTIP_DSN`).
+5. Attach a domain (or use Coolify's auto-generated `.sslip.io` FQDN for testing).
+6. **Deploy**. Watch each app's **Deployments** tab — failed builds leave the
+   previous container running (safe rollback).
 
 ### 2. Vercel — reconfig coming-soon (~2 min)
 

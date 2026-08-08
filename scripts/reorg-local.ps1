@@ -140,20 +140,51 @@ $serviceDir = Join-Path $fresh_monorepo 'loudrr-fastapi'
 New-Item -ItemType Directory -Path $serviceDir -Force | Out-Null
 
 # Move backend/, frontend/, scripts/, docs/ into loudrr-fastapi/ subdir.
-# git mv preserves rename detection in the diff.
+# We're going to overwrite the fresh .git afterwards — for now, plain
+# Move-Item. Rename detection isn't preserved either way (fresh .git is
+# stateless w.r.t. the flat tree).
 $dirsToMove = @('backend', 'frontend', 'scripts', 'docs')
 foreach ($d in $dirsToMove) {
     if (Test-Path (Join-Path $fresh_monorepo $d)) {
-        # We're going to overwrite the fresh .git afterwards — for now, plain Move-Item
         Move-Item -Path (Join-Path $fresh_monorepo $d) -Destination $serviceDir
         Ok "moved $d -> loudrr-fastapi/$d"
     }
 }
+
+# Move the fastapi .venv INTO loudrr-fastapi/ so dev.ps1's $projectRoot lookup
+# (which resolves .venv relative to itself) finds it. Directly moving a venv
+# on the same filesystem doesn't break `python.exe` (which is what dev.ps1
+# uses), only Activate scripts — but those bake absolute paths anyway and
+# get overwritten by pip/python on next use.
+$venvSrc = Join-Path $fresh_monorepo '.venv'
+$venvDst = Join-Path $serviceDir '.venv'
+if (Test-Path $venvSrc) {
+    Info "Moving fastapi .venv (~200MB) into loudrr-fastapi/ ..."
+    Move-Item -Path $venvSrc -Destination $venvDst
+    Ok "moved .venv -> loudrr-fastapi/.venv"
+} else {
+    Warn "no .venv found at $venvSrc (recreate with: py -m venv loudrr-fastapi\\.venv)"
+}
+
 # The OLD loudrr-fastapi/README.md and .gitignore are inside serviceDir now, along
 # with the code — that's the service-level README. The top-level (monorepo) README
 # comes from the snapshot in step 6.
 if (Test-Path (Join-Path $fresh_monorepo 'README.md'))  { Move-Item (Join-Path $fresh_monorepo 'README.md')  (Join-Path $serviceDir 'README.md')  -Force }
 if (Test-Path (Join-Path $fresh_monorepo '.gitignore')) { Move-Item (Join-Path $fresh_monorepo '.gitignore') (Join-Path $serviceDir '.gitignore') -Force }
+
+# Move project-scratch dirs from fastapi tooling INTO the service subdir
+# (they're specifically from running the fastapi tests / typecheck).
+# NOTE: .claude/ INTENTIONALLY stays at loudrr-project/ root so opening the
+# monorepo as a Claude Code workspace keeps its agent/skills/plugins config
+# discoverable at the workspace root.
+$scratchToMove = @('.mypy_cache', '.pytest_cache', '.ruff_cache', '.hypothesis')
+foreach ($s in $scratchToMove) {
+    $src = Join-Path $fresh_monorepo $s
+    if (Test-Path $src) {
+        Move-Item -Path $src -Destination (Join-Path $serviceDir $s)
+        Ok "moved $s -> loudrr-fastapi/$s"
+    }
+}
 
 
 # =============================================================================

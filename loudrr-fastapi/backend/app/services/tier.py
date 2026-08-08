@@ -91,7 +91,9 @@ async def load_tiers_from_settings(db) -> bool:
             )
             return False
         try:
-            threshold = int(thr_raw)
+            # str(thr_raw) so mypy accepts the `object` type from the sentinel
+            # pattern; runtime path unchanged since int(x) also accepts str.
+            threshold = int(str(thr_raw))
             multiplier = mul_raw if isinstance(mul_raw, Decimal) else Decimal(str(mul_raw))
         except (TypeError, ValueError, InvalidOperation) as e:
             logger.warning(

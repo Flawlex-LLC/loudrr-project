@@ -321,7 +321,8 @@ async def list_site_settings(
         for spec in group.settings:
             row = by_key.get(spec.key)
             persisted = row is not None
-            value = row.value if persisted else spec.default
+            # Narrow the Optional so mypy doesn't complain about row.value on None.
+            value = row.value if row is not None else spec.default
             settings_out.append({
                 "key": spec.key,
                 "value": value,

@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     coingecko_demo: str = Field(
         default="", validation_alias=AliasChoices("COINGECKHO_DEMO", "COINGECKO_DEMO_KEY", "COINGECKO_DEMO")
     )
+    # Our own INCOMING key: gates the miniapp-facing endpoints (/v1/score,
+    # /v1/top-followers, /v1/score-changes, /v1/followers-stats,
+    # /v1/top-following). Unset = keyless mode (historical behavior — safe
+    # for dev + smooth rollout). Set in prod so only the miniapp with the
+    # matching env var can hit these endpoints. See app/api/auth.py.
+    analytics_api_key: str = ""
 
     # --- Storage ---
     database_url: str = (

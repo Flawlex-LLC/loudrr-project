@@ -45,11 +45,17 @@ class Settings(BaseSettings):
     loudrr_gateway_api: str = ""
     gateway_base_url: str = "https://gateway.loudrr.com"
 
-    # Base URL of the loudrr-analytics-service (its keyless /v1/profile). This
-    # is the ONLY score provider — no TweetScout fallback exists. Empty ->
-    # graceful "default score, retry later" (users are never punished for our
-    # infra being down; scores just return None and callers use the default).
+    # Base URL of the loudrr-analytics-service. This is the ONLY score provider
+    # — no TweetScout fallback exists. Empty -> graceful "default score, retry
+    # later" (users are never punished for our infra being down; scores just
+    # return None and callers use the default).
     loudrr_analytics_url: str = ""
+    # Optional shared secret sent as X-API-Key on requests to the analytics
+    # service. Required by the analytics side (as ANALYTICS_API_KEY) for the
+    # miniapp-facing endpoints: /v1/score, /v1/top-followers, /v1/score-changes,
+    # /v1/followers-stats, /v1/top-following. Leave empty for local dev against
+    # a keyless analytics instance; set in prod to hit the gated endpoints.
+    loudrr_analytics_key: str = ""
 
     # --- X OAuth 2.0 (Ch11) ---
     x_oauth_client_id: str = ""

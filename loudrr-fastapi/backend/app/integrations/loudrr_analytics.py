@@ -12,8 +12,11 @@ Scale note: the Loudrr Score is 0-6000, but the tier thresholds top out at
 band). So the score is fed straight into ``tier.tier_for`` with NO rescaling.
 
 Failure policy: any timeout / non-200 / not-found returns ``None`` (never
-raises). The /v1/profile endpoint is public + keyless (the marketing-funnel
-score), so no API key is needed.
+raises). The /v1/profile endpoint is currently keyless (marketing-funnel);
+the miniapp-facing endpoints (/v1/score, /v1/top-followers, /v1/score-changes,
+/v1/followers-stats, /v1/top-following) are gated by X-API-Key when
+``settings.loudrr_analytics_key`` is set — we send the header on EVERY
+request (harmless if the endpoint doesn't check it, required when it does).
 """
 import logging
 from typing import Optional
@@ -25,6 +28,14 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(15.0)
+
+
+def _auth_headers() -> dict[str, str]:
+    """Build the auth header dict. Empty when no key is configured so httpx
+    just sends no X-API-Key (backwards-compat with the keyless historical
+    behavior; also lets local dev hit /v1/profile without any config)."""
+    key = settings.loudrr_analytics_key
+    return {"X-API-Key": key} if key else {}
 
 
 class LoudrrAnalyticsClient:
@@ -43,7 +54,7 @@ class LoudrrAnalyticsClient:
             return None
         u = self._clean(username)
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_auth_headers()) as client:
                 resp = await client.get(f"{self.base_url}/v1/profile", params={"userName": u})
         except httpx.HTTPError as e:
             logger.error("Loudrr analytics request failed for %s: %s", u, e)
@@ -75,6 +86,38 @@ class LoudrrAnalyticsClient:
             "loudrr_percentile": d.get("percentile"),
             "smart_followers": d.get("eliteFollowers"),
         }
+
+    async def get_top_followers(self, username: str, k: int = 10) -> Optional[list[dict]]:
+        """Top-N smart-set members who follow ``username``, ranked by Loudrr Score.
+
+        Returns a list of user dicts (each with userName, name, score, ...) or
+        None on any error. ``k`` defaults to 10 for the miniapp's "Top 10
+        Smart Followers" panel; bump higher (up to 100) for deeper views.
+
+        The endpoint is GATED — needs settings.loudrr_analytics_key to be set
+        matching the analytics service's ANALYTICS_API_KEY, or the analytics
+        service responds 401.
+        """
+        if not self.base_url:
+            logger.warning("LOUDRR_ANALYTICS_URL not configured")
+            return None
+        u = self._clean(username)
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_auth_headers()) as client:
+                resp = await client.get(
+                    f"{self.base_url}/v1/top-followers",
+                    params={"userName": u, "k": k},
+                )
+        except httpx.HTTPError as e:
+            logger.error("top-followers request failed for %s: %s", u, e)
+            return None
+        if resp.status_code == 401:
+            logger.error("top-followers 401 for %s — LOUDRR_ANALYTICS_KEY missing/wrong", u)
+            return None
+        if resp.status_code != 200:
+            logger.error("top-followers error %s for %s", resp.status_code, u)
+            return None
+        return (resp.json() or {}).get("users") or []
 
 
 def get_loudrr_client() -> LoudrrAnalyticsClient:

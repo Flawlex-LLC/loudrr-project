@@ -1,4 +1,4 @@
-# Loudrr-FastAPI Local Development Startup
+﻿# Loudrr-FastAPI Local Development Startup
 # Run:  .\scripts\dev.ps1   (from repo root)
 #   or: cd scripts; .\dev.ps1
 #
@@ -9,7 +9,7 @@
 #   1. Postgres  (docker compose, port 5432)
 #   2. Redis     (docker compose, port 6379)
 #   3. uvicorn   (FastAPI backend, port 8000)
-#   4. arq       (worker — outbox drain, daily credit reset, post expiry crons)
+#   4. arq       (worker - outbox drain, daily credit reset, post expiry crons)
 #   5. Next.js   (frontend, port 3000)
 #   6. cloudflared (tunnel: dev-api.loudrr.com -> :8000, dev-app.loudrr.com -> :3000)
 #   7. shell     (interactive shell for ad-hoc queries / curl)
@@ -130,7 +130,7 @@ Write-Host "  Frontend:          http://localhost:3000"
 Write-Host "  Admin dashboard:   http://localhost:3000/admin"
 Write-Host "  Mini-app:          http://localhost:3000/app"
 Write-Host ""
-Write-Host "URLs (via Cloudflare tunnel — live from anywhere, incl. Telegram):" -ForegroundColor Cyan
+Write-Host "URLs (via Cloudflare tunnel - live from anywhere, incl. Telegram):" -ForegroundColor Cyan
 Write-Host "  Backend:           https://dev-api.loudrr.com"
 Write-Host "  Frontend:          https://dev-app.loudrr.com"
 Write-Host "  Mini-app:          https://dev-app.loudrr.com/app  (set MINIAPP_URL to this in .env for real bot buttons)"

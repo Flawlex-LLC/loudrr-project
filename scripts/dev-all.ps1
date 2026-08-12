@@ -1,4 +1,4 @@
-# dev-all.ps1 — one-shot local launcher for the ENTIRE monorepo.
+﻿# dev-all.ps1 - one-shot local launcher for the ENTIRE monorepo.
 #
 # Opens tabs for every service in one Windows Terminal window:
 #   1. Postgres          (loudrr-fastapi/backend docker-compose, port 5432)
@@ -6,7 +6,7 @@
 #   3. FastAPI :8000     (loudrr-fastapi/backend uvicorn)
 #   4. arq worker        (loudrr-fastapi/backend arq)
 #   5. Next.js :3000     (loudrr-fastapi/frontend npm run dev)
-#   6. Analytics :8001   (loudrr-analytics-service uvicorn)  — off by default; uncomment $spawnAnalytics
+#   6. Analytics :8001   (loudrr-analytics-service uvicorn)  - off by default; uncomment $spawnAnalytics
 #   7. cloudflared       (tunnel: dev-api / dev-app)
 #   8. shell             (interactive; venv sourced from loudrr-fastapi/.venv)
 #
@@ -131,7 +131,7 @@ Write-Host "  Admin dashboard:   http://localhost:3000/admin"
 Write-Host "  Mini-app:          http://localhost:3000/app"
 if ($spawnAnalytics) { Write-Host "  Analytics:         http://localhost:8001" }
 Write-Host ""
-Write-Host "URLs (via Cloudflare tunnel — live from anywhere, incl. Telegram):" -ForegroundColor Cyan
+Write-Host "URLs (via Cloudflare tunnel - live from anywhere, incl. Telegram):" -ForegroundColor Cyan
 Write-Host "  Backend:           https://dev-api.loudrr.com"
 Write-Host "  Frontend:          https://dev-app.loudrr.com"
 Write-Host ""

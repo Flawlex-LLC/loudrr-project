@@ -8,6 +8,11 @@
 .env.local
 *.env.local
 !.env.example
+# infra API tokens (Hetzner/Contabo/Coolify/analytics key) — never commit
+.env.infra
+
+# --- scratch / review outputs (Claude sessions) ---
+scratchpad-*.html
 
 # --- Python ---
 __pycache__/

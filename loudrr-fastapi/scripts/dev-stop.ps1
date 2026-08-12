@@ -1,4 +1,4 @@
-# Loudrr-FastAPI Tear-Down
+﻿# Loudrr-FastAPI Tear-Down
 # Run:  .\scripts\dev-stop.ps1   (from repo root)
 #
 # Kills anything bound to the dev ports (8000, 3000) and stops the
@@ -46,4 +46,4 @@ Pop-Location
 
 Write-Host ""
 Write-Host "All dev services stopped." -ForegroundColor Green
-Write-Host "Postgres volume preserved — re-run .\dev.ps1 to bring everything back."
+Write-Host "Postgres volume preserved - re-run .\dev.ps1 to bring everything back."

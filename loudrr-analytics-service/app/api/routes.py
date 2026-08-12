@@ -274,13 +274,23 @@ async def get_score(
 
 
 @router.get("/score-changes", dependencies=[Depends(require_api_key)])
-async def get_score_changes(user_link: str | None = _link, username: str | None = _name, user_id: str | None = _uid):
-    return await scoring.score_changes(await _target(user_link, username, user_id))
+async def get_score_changes(
+    user_link: str | None = _link,
+    username: str | None = _name,
+    user_id: str | None = _uid,
+    user_name: str | None = _camel,
+):
+    return await scoring.score_changes(await _target(user_link, username or user_name, user_id))
 
 
 @router.get("/followers-stats", dependencies=[Depends(require_api_key)])
-async def get_followers_stats(user_link: str | None = _link, username: str | None = _name, user_id: str | None = _uid):
-    return await scoring.followers_stats(await _target(user_link, username, user_id))
+async def get_followers_stats(
+    user_link: str | None = _link,
+    username: str | None = _name,
+    user_id: str | None = _uid,
+    user_name: str | None = _camel,
+):
+    return await scoring.followers_stats(await _target(user_link, username or user_name, user_id))
 
 
 @router.get("/top-followers", dependencies=[Depends(require_api_key)])
@@ -288,20 +298,26 @@ async def get_top_followers(
     user_link: str | None = _link,
     username: str | None = _name,
     user_id: str | None = _uid,
+    user_name: str | None = _camel,
     k: int = Query(default=10, ge=1, le=100, description="How many top smart followers to return (default 10, max 100)."),
 ):
     """Top-N smart-set members who follow the target user, ranked by Loudrr Score.
     ``k`` is exposed as a query param so the miniapp can request 10 (its default UI)
     or bump it up for the deeper 'smart followers' view — no need for the caller to
     slice client-side + waste the extra DB rows on the wire."""
-    return {"users": await scoring.top_followers(await _target(user_link, username, user_id), k=k)}
+    return {"users": await scoring.top_followers(await _target(user_link, username or user_name, user_id), k=k)}
 
 
 @router.get("/top-following", dependencies=[Depends(require_api_key)])
-async def get_top_following(user_link: str | None = _link, username: str | None = _name, user_id: str | None = _uid):
+async def get_top_following(
+    user_link: str | None = _link,
+    username: str | None = _name,
+    user_id: str | None = _uid,
+    user_name: str | None = _camel,
+):
     """Top smart accounts that X *follows*, by score. Only available when X's own
     following has been crawled (i.e. X is in the smart set); otherwise empty."""
-    uid = await _target(user_link, username, user_id)
+    uid = await _target(user_link, username or user_name, user_id)
     async with SessionLocal() as session:
         rows = (
             await session.execute(

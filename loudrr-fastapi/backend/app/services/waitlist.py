@@ -10,7 +10,7 @@ from app.models.user import User
 from app.models.waitlist_entry import WaitlistEntry
 from app.repositories.user import UserRepository
 from app.repositories.waitlist import WaitlistRepository
-from app.services.x_url import extract_x_username
+from app.services.waitlist_x_oauth import verify_and_extract
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +75,13 @@ async def register_entry(db, *, tg_user: dict, payload) -> RegisterResult:
     if not telegram_id:
         raise BadRequest("Missing Telegram ID")
 
-    x_username = extract_x_username(payload.x_link)
-    if not x_username:
-        raise BadRequest("Invalid X profile link")
+    # X OAuth is now mandatory step 1 of the waitlist flow. The proof is a
+    # signed itsdangerous token minted by the callback after the applicant
+    # completes X OAuth — verify_and_extract re-checks signature, iat freshness,
+    # and cross-references the embedded tg_id against Telegram initData.
+    x_username, x_user_id = verify_and_extract(
+        payload.x_proof, telegram_id=telegram_id,
+    )
 
     users = UserRepository(db)
     waitlist = WaitlistRepository(db)
@@ -104,7 +108,9 @@ async def register_entry(db, *, tg_user: dict, payload) -> RegisterResult:
             telegram_username=tg_user.get("username", "") or "",
             telegram_display_name=tg_user.get("first_name", "") or "",
             x_username=x_username,
-            x_link=payload.x_link,
+            x_link=f"https://x.com/{x_username}",
+            x_verified=True,
+            x_user_id=x_user_id,
             # region/niche are Enums in the schema, plain strings in the DB —
             # store .value ("europe"), or "" when not given
             region=payload.region.value if payload.region else "",

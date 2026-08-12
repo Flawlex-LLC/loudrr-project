@@ -1,15 +1,67 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { hapticFeedback } from '@/lib/telegram';
+import { useState, useEffect, useCallback } from 'react';
+import { hapticFeedback, openLink } from '@/lib/telegram';
 import { api, OtherPlatformEntry } from '@/lib/api';
+import { DESIGN_MODE } from '@/lib/mockData';
 import { ICON_GRADIENT_STYLE, REGIONS, NICHES } from '../shared';
 import { BoltIconFill, XLogoIcon } from '../icons';
 
 /**
  * Loudrr Mini App — WaitlistRegistrationScreen
- * Extracted from app/app/page.tsx during the modularization refactor.
+ *
+ * Flow (post-OAuth-first refactor):
+ *   Step 1: "Connect X" — one button. Kicks off backend OAuth start, opens
+ *           X in an external tab, then polls sessionStorage for the signed
+ *           proof that /waitlist/oauth-return dropped there on return.
+ *   Step 2: Region.
+ *   Step 3: Niche + other platforms + submit (with the proof in the body).
+ *
+ * The X handle is never typed by the user — it comes from the OAuth /users/me
+ * call server-side and is baked into the signed proof. Client-side we decode
+ * the first segment of the itsdangerous token only for display; the server
+ * re-verifies signature + freshness on register.
  */
+
+const PROOF_KEY = 'x_oauth_proof';
+const PROOF_IAT_KEY = 'x_oauth_proof_iat';
+const PROOF_ERR_KEY = 'x_oauth_error';
+// Client-side freshness bound. Server enforces 10-min max_age on the signed
+// proof itself; we tighten to 8 min here so a user coming back to a
+// backgrounded tab gets an obvious "Please connect X again" instead of
+// silently advancing through the whole form and 400-ing at submit.
+const PROOF_MAX_AGE_MS = 8 * 60 * 1000;
+
+const OAUTH_ERROR_COPY: Record<string, string> = {
+  denied: 'You cancelled the X authorization. Try again to continue.',
+  invalid: 'X returned an invalid response. Please try again.',
+  expired: 'Your session timed out. Please connect X again.',
+  token: "Couldn't complete the handshake with X. Please try again.",
+  profile: "Couldn't read your X profile. Please try again.",
+};
+
+/**
+ * itsdangerous URLSafeTimedSerializer emits `<b64json>.<b64ts>.<b64sig>`.
+ * The first dot-separated segment is url-safe-base64 of the JSON payload.
+ * We ONLY use this for a display hint (the verified @handle shown on step 2);
+ * the server re-verifies the signature and enforces max_age on submit.
+ */
+function decodeProofUsername(proof: string): string | null {
+  try {
+    const first = proof.split('.')[0];
+    if (!first) return null;
+    // url-safe base64: convert to standard b64 and pad
+    let b64 = first.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const json = typeof atob === 'function' ? atob(b64) : '';
+    if (!json) return null;
+    const payload = JSON.parse(json);
+    if (payload && typeof payload.x_username === 'string') return payload.x_username;
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export function WaitlistRegistrationScreen({
   onSuccess,
@@ -17,7 +69,8 @@ export function WaitlistRegistrationScreen({
   onSuccess: (data: { x_username: string; referral_code?: string }) => void;
 }) {
   const [step, setStep] = useState(1);
-  const [xLink, setXLink] = useState('');
+  const [xProof, setXProof] = useState<string | null>(null);
+  const [xUsername, setXUsername] = useState<string | null>(null);
   const [region, setRegion] = useState('');
   const [niche, setNiche] = useState('');
   const [otherPlatforms, setOtherPlatforms] = useState<Set<string>>(new Set());
@@ -26,6 +79,8 @@ export function WaitlistRegistrationScreen({
   const [otherPlatformName, setOtherPlatformName] = useState('');
   const [otherPlatformUsername, setOtherPlatformUsername] = useState('');
   const [loading, setLoading] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [waitingForOAuth, setWaitingForOAuth] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Get referral code from URL query param (e.g., ?ref=ABC123)
@@ -41,6 +96,79 @@ export function WaitlistRegistrationScreen({
     }
   }, []);
 
+  // Pick up the proof (or an error) that /waitlist/oauth-return stashed for us.
+  const consumeStoredProof = useCallback(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const err = sessionStorage.getItem(PROOF_ERR_KEY);
+      if (err) {
+        sessionStorage.removeItem(PROOF_ERR_KEY);
+        setError(OAUTH_ERROR_COPY[err] || 'X authorization failed. Please try again.');
+        setWaitingForOAuth(false);
+        hapticFeedback('error');
+      }
+      const proof = sessionStorage.getItem(PROOF_KEY);
+      if (!proof) return false;
+
+      // Freshness check — stale proofs go to the wall, user is bounced back
+      // to step 1 with an actionable message. Without this, the user would
+      // march to step 3 and 400 at submit.
+      const iatStr = sessionStorage.getItem(PROOF_IAT_KEY);
+      const iat = iatStr ? Number(iatStr) : NaN;
+      const ageOk = Number.isFinite(iat) && Date.now() - iat < PROOF_MAX_AGE_MS;
+      if (!ageOk) {
+        sessionStorage.removeItem(PROOF_KEY);
+        sessionStorage.removeItem(PROOF_IAT_KEY);
+        setXProof(null);
+        setXUsername(null);
+        setStep(1);
+        setWaitingForOAuth(false);
+        setError('Your X session expired. Please connect X again.');
+        hapticFeedback('error');
+        return false;
+      }
+
+      const username = decodeProofUsername(proof);
+      setXProof(proof);
+      setXUsername(username);
+      setStep(s => (s < 2 ? 2 : s));
+      setWaitingForOAuth(false);
+      setError(null);
+      hapticFeedback('success');
+      return true;
+    } catch {
+      // sessionStorage unavailable — no-op.
+    }
+    return false;
+  }, []);
+
+  // Mount check — user may already have OAuth'd in a prior visit.
+  useEffect(() => {
+    consumeStoredProof();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // While waiting for OAuth to return, poll sessionStorage + listen for
+  // window focus (Telegram in-app browser fires visibilitychange when the
+  // user swipes back to the WebView).
+  useEffect(() => {
+    if (!waitingForOAuth || xProof) return;
+    const interval = window.setInterval(() => {
+      consumeStoredProof();
+    }, 1500);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') consumeStoredProof();
+    };
+    const onFocus = () => consumeStoredProof();
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [waitingForOAuth, xProof, consumeStoredProof]);
+
   const togglePlatform = (platform: string) => {
     setOtherPlatforms(prev => {
       const next = new Set(prev);
@@ -53,8 +181,53 @@ export function WaitlistRegistrationScreen({
     });
   };
 
+  const handleConnectX = async () => {
+    if (connecting) return;
+    setError(null);
+    setConnecting(true);
+
+    // Design-mode short-circuit: fabricate a proof so the wizard progresses
+    // without hitting a real X handshake.
+    if (DESIGN_MODE) {
+      try {
+        const fakeUsername = 'alexrivera';
+        const fakePayload = btoa(JSON.stringify({
+          tg_id: 0,
+          x_username: fakeUsername,
+          x_user_id: 'mock-x-id',
+          iat: Math.floor(Date.now() / 1000),
+        })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        const fakeProof = `${fakePayload}.mocktimestamp.mocksignature`;
+        try {
+          sessionStorage.setItem(PROOF_KEY, fakeProof);
+          sessionStorage.setItem(PROOF_IAT_KEY, String(Date.now()));
+        } catch { /* ignore */ }
+        setXProof(fakeProof);
+        setXUsername(fakeUsername);
+        setStep(2);
+        hapticFeedback('success');
+      } finally {
+        setConnecting(false);
+      }
+      return;
+    }
+
+    try {
+      const { authorize_url } = await api.startWaitlistXOAuth();
+      hapticFeedback('light');
+      setWaitingForOAuth(true);
+      openLink(authorize_url);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to start X verification');
+      hapticFeedback('error');
+      setWaitingForOAuth(false);
+    } finally {
+      setConnecting(false);
+    }
+  };
+
   const handleSubmit = async () => {
-    if (!xLink || !region || !niche) return;
+    if (!xProof || !xUsername || !region || !niche) return;
 
     setLoading(true);
     setError(null);
@@ -68,14 +241,20 @@ export function WaitlistRegistrationScreen({
       if (otherPlatforms.has('other') && otherPlatformUsername.trim())
         platforms.push({ platform: 'other', username: otherPlatformUsername.trim(), platform_name: otherPlatformName.trim() });
 
-      const result = await api.registerWaitlist(
-        xLink, referralCode || undefined,
-        region, niche, platforms.length ? platforms : undefined
-      );
+      const result = await api.registerWaitlist({
+        x_proof: xProof,
+        referral_code: referralCode || undefined,
+        region,
+        niche,
+        other_platforms: platforms.length ? platforms : undefined,
+      });
       if (result.status === 'registered' || result.status === 'already_registered') {
         hapticFeedback('success');
-        const username = xLink.replace(/^https?:\/\/(www\.)?(twitter\.com|x\.com)\//, '').replace(/\/.*$/, '').replace(/^@/, '');
-        onSuccess({ x_username: username, referral_code: result.referral_code });
+        try {
+          sessionStorage.removeItem(PROOF_KEY);
+          sessionStorage.removeItem(PROOF_IAT_KEY);
+        } catch { /* ignore */ }
+        onSuccess({ x_username: xUsername, referral_code: result.referral_code });
       }
     } catch (err: any) {
       setError(err.message || 'Registration failed');
@@ -102,9 +281,9 @@ export function WaitlistRegistrationScreen({
     setStep(s => s - 1);
   };
 
-  const stepTitles = ['Your X Profile', 'Your Region', 'Your Niche'];
+  const stepTitles = ['Connect Your X', 'Your Region', 'Your Niche'];
   const stepSubtitles = [
-    'Drop your X profile link to get started.',
+    'Verify your X account to get started.',
     'Where are you based?',
     'What best describes your focus?',
   ];
@@ -136,6 +315,23 @@ export function WaitlistRegistrationScreen({
         {stepSubtitles[step - 1]}
       </p>
 
+      {/* Verified-handle chip on steps 2/3 */}
+      {step > 1 && xUsername && (
+        <div
+          className="flex items-center gap-2 px-3 py-1.5 rounded-full mb-5 text-xs"
+          style={{
+            background: 'rgba(34, 197, 94, 0.08)',
+            border: '1px solid rgba(34, 197, 94, 0.25)',
+            color: 'rgba(255,255,255,0.85)',
+          }}
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth={3}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          <span>Connected as <span className="font-semibold">@{xUsername}</span></span>
+        </div>
+      )}
+
       {/* Form Card */}
       <div
         className="w-full max-w-md rounded-2xl p-5 mb-8"
@@ -145,45 +341,64 @@ export function WaitlistRegistrationScreen({
           border: '1px solid rgba(249, 84, 0, 0.15)',
         }}
       >
-        {/* ---- STEP 1: X Profile ---- */}
+        {/* ---- STEP 1: Connect X ---- */}
         {step === 1 && (
           <>
-            {/* X Profile Input */}
             <div className="mb-5">
-              <label className="text-sm text-gray-400 mb-1.5 block">X Profile</label>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 mb-4">
                 <div className="glass-icon glass-icon-md glass-icon-orange pointer-events-none">
                   <XLogoIcon className="w-5 h-5" style={ICON_GRADIENT_STYLE} />
                 </div>
-                <input
-                  type="url"
-                  value={xLink}
-                  onChange={(e) => setXLink(e.target.value)}
-                  placeholder="https://x.com/yourhandle"
-                  className="flex-1 px-4 py-3 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#f95400]/50 text-sm"
-                  style={inputStyle}
-                />
+                <div>
+                  <div className="text-white font-medium text-sm">Verify with X</div>
+                  <div className="text-gray-500 text-xs">
+                    {waitingForOAuth
+                      ? 'Waiting for X… complete authorization in the tab that opened.'
+                      : "We'll open X so you can approve Loudrr."}
+                  </div>
+                </div>
               </div>
-            </div>
 
-            {/* Next Button */}
-            <button
-              onClick={nextStep}
-              disabled={!xLink}
-              className="w-full h-12 rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
-              style={{
-                background: 'linear-gradient(135deg, rgba(249, 84, 0, 0.2) 0%, rgba(255, 140, 66, 0.15) 50%, rgba(249, 84, 0, 0.18) 100%)',
-                backdropFilter: 'blur(16px)',
-                border: '1px solid rgba(249, 84, 0, 0.4)',
-                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255, 140, 66, 0.2) inset',
-                color: 'white',
-              }}
-            >
-              Next
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
+              {error && (
+                <p className="text-red-400 text-xs mb-3 text-center">{error}</p>
+              )}
+
+              <button
+                onClick={handleConnectX}
+                disabled={connecting}
+                className="w-full h-12 rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(249, 84, 0, 0.2) 0%, rgba(255, 140, 66, 0.15) 50%, rgba(249, 84, 0, 0.18) 100%)',
+                  backdropFilter: 'blur(16px)',
+                  border: '1px solid rgba(249, 84, 0, 0.4)',
+                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255, 140, 66, 0.2) inset',
+                  color: 'white',
+                }}
+              >
+                {connecting ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Opening X…
+                  </>
+                ) : waitingForOAuth ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Waiting for X…
+                  </>
+                ) : (
+                  <>
+                    <XLogoIcon className="w-4 h-4" />
+                    Connect X
+                  </>
+                )}
+              </button>
+
+              {waitingForOAuth && (
+                <p className="text-gray-600 text-xs text-center mt-3">
+                  After authorizing on X, return here. We'll detect it automatically.
+                </p>
+              )}
+            </div>
           </>
         )}
 
@@ -220,40 +435,24 @@ export function WaitlistRegistrationScreen({
               </div>
             </div>
 
-            {/* Nav Buttons */}
-            <div className="flex gap-3">
-              <button
-                onClick={prevStep}
-                className="flex-1 h-12 rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 transition-all active:scale-95"
-                style={{
-                  background: 'rgba(255, 255, 255, 0.04)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  color: 'rgba(255, 255, 255, 0.6)',
-                }}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                </svg>
-                Back
-              </button>
-              <button
-                onClick={nextStep}
-                disabled={!region}
-                className="flex-1 h-12 rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
-                style={{
-                  background: 'linear-gradient(135deg, rgba(249, 84, 0, 0.2) 0%, rgba(255, 140, 66, 0.15) 50%, rgba(249, 84, 0, 0.18) 100%)',
-                  backdropFilter: 'blur(16px)',
-                  border: '1px solid rgba(249, 84, 0, 0.4)',
-                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255, 140, 66, 0.2) inset',
-                  color: 'white',
-                }}
-              >
-                Next
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
-            </div>
+            {/* Next Button (no Back — step 1 is now a one-way OAuth handshake) */}
+            <button
+              onClick={nextStep}
+              disabled={!region}
+              className="w-full h-12 rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+              style={{
+                background: 'linear-gradient(135deg, rgba(249, 84, 0, 0.2) 0%, rgba(255, 140, 66, 0.15) 50%, rgba(249, 84, 0, 0.18) 100%)',
+                backdropFilter: 'blur(16px)',
+                border: '1px solid rgba(249, 84, 0, 0.4)',
+                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255, 140, 66, 0.2) inset',
+                color: 'white',
+              }}
+            >
+              Next
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
           </>
         )}
 

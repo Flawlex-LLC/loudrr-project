@@ -8,9 +8,20 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.crypto import sign_x_proof
+from app.core.time_utils import utcnow
 from app.schemas.waitlist import OtherPlatform, OtherPlatformKind
 from app.services import waitlist as waitlist_svc
 from app.services.x_url import extract_x_username
+
+
+def _proof(tg_id: int, username: str, x_user_id: str = "1"):
+    return sign_x_proof({
+        "tg_id": tg_id,
+        "x_username": username,
+        "x_user_id": x_user_id,
+        "iat": int(utcnow().timestamp()),
+    })
 
 
 # ---- X username extraction: hostile inputs all resolve to None ----
@@ -35,11 +46,11 @@ def test_extract_x_username_rejects_hostile(bad):
 
 
 # ---- waitlist register endpoint: malformed body is a 422, never a 500 ----
-async def test_register_missing_x_link_422(client):
+async def test_register_missing_x_proof_422(client):
     r = await client.post(
         "/waitlist/register/",
         params={"telegram_id": 9_500_002},
-        json={},  # x_link is now the only required field
+        json={},  # x_proof is the only required field
     )
     assert r.status_code == 422
 
@@ -47,7 +58,7 @@ async def test_register_missing_x_link_422(client):
 # ---- service caps / normalizes what it stores ----
 async def test_other_platforms_capped_at_five(db_session):
     payload = SimpleNamespace(
-        x_link="https://x.com/capuser",
+        x_proof=_proof(tg_id=9_500_003, username="capuser"),
         region=None,
         niche=None,
         referral_code=None,
@@ -66,7 +77,7 @@ async def test_large_telegram_id_is_accepted(db_session):
     """Telegram IDs are 64-bit — a value past 32-bit must store fine (BigInteger)."""
     big = 8_888_888_888  # > 2**32
     payload = SimpleNamespace(
-        x_link="https://x.com/biguser",
+        x_proof=_proof(tg_id=big, username="biguser"),
         region=None,
         niche=None,
         referral_code=None,

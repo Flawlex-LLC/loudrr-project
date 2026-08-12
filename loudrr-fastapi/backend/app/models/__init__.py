@@ -10,6 +10,7 @@ import app.models.waitlist_entry  # noqa: F401
 import app.models.x_profile  # noqa: F401
 import app.models.x_verification_request  # noqa: F401
 import app.models.x_oauth_state  # noqa: F401
+import app.models.waitlist_oauth_state  # noqa: F401
 import app.models.post  # noqa: F401
 import app.models.engagement  # noqa: F401
 import app.models.verification_batch  # noqa: F401

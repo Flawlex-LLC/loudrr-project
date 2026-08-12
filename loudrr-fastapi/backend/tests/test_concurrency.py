@@ -141,9 +141,16 @@ async def test_concurrent_submit_cannot_overspend(db_session, make_user, monkeyp
 async def test_concurrent_waitlist_register_makes_one_entry(db_session, make_user):
     """The same telegram_id registering twice at once yields exactly one row —
     the unique constraint + the race re-query guarantee it (no duplicates)."""
+    from app.core.crypto import sign_x_proof
+    from app.core.time_utils import utcnow as _utcnow
+
     tg = {"id": 770_001, "username": "u", "first_name": "U"}
+    proof = sign_x_proof({
+        "tg_id": 770_001, "x_username": "dupuser", "x_user_id": "1",
+        "iat": int(_utcnow().timestamp()),
+    })
     payload = SimpleNamespace(
-        x_link="https://x.com/dupuser",
+        x_proof=proof,
         region=None, niche=None, other_platforms=[], referral_code=None,
     )
     engine = create_async_engine(TEST_DATABASE_URL)

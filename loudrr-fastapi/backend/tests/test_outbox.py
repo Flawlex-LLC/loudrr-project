@@ -97,10 +97,15 @@ async def test_cleanup_deletes_old_sent(db_session):
 
 async def test_waitlist_register_queues_event(client, db_session):
     # registering through the API should leave a waitlist_submitted outbox row
+    from app.core.crypto import sign_x_proof
+    proof = sign_x_proof({
+        "tg_id": 555, "x_username": "someone", "x_user_id": "42",
+        "iat": int(utcnow().timestamp()),
+    })
     r = await client.post(
         "/waitlist/register/",
         params={"telegram_id": 555},
-        json={"x_link": "https://x.com/someone"},
+        json={"x_proof": proof},
     )
     assert r.status_code == 200
     events = await OutboxEventRepository(db_session).list(limit=10)

@@ -85,3 +85,15 @@ class LinkXResponse(BaseModel):
     tier: str
     followers_count: int
     display_name: str
+
+
+# ---- /user/waitlist-enrichment/ ----
+class WaitlistEnrichmentResponse(BaseModel):
+    # The X handle we resolved for the caller (from User row, else WaitlistEntry).
+    # The frontend uses this to guard against painting the caller's score onto
+    # some other handle when the page is opened with ?u=someone_else.
+    x_username: str | None
+    score: float | None
+    tier: str | None
+    followers: list[str]  # bare X usernames, no '@', up to 10
+    followers_count: int  # 0 when followers is empty

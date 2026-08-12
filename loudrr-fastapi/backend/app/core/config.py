@@ -60,7 +60,12 @@ class Settings(BaseSettings):
     # --- X OAuth 2.0 (Ch11) ---
     x_oauth_client_id: str = ""
     x_oauth_client_secret: str = ""
+    # Legacy post-approval flow callback: /api/auth/x/callback/
     x_oauth_callback_url: str = ""
+    # Waitlist-first flow callback: /api/auth/x/callback/waitlist/. Both URLs
+    # must be whitelisted in the X Developer Portal for the same app. If unset,
+    # the waitlist OAuth start endpoint 503s.
+    x_oauth_waitlist_callback_url: str = ""
 
     # --- URLs / misc ---
     site_url: str = ""

@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { hapticFeedback, openLink } from '@/lib/telegram';
+import { api, type WaitlistEnrichment } from '@/lib/api';
 import { ClipboardIcon, CheckIconFill, XLogoIcon, TelegramIcon } from '../icons';
 
 /**
@@ -15,8 +16,48 @@ export function WaitlistPendingScreen({ xUsername, referralCode }: { xUsername?:
   const SITE_URL = typeof window !== 'undefined' ? window.location.origin : '';
   const BOT_USERNAME = 'loudrr_bot';
   const sharePageUrl = xUsername ? `${SITE_URL}/waitlist/${xUsername}` : SITE_URL;
+
+  const [enrichment, setEnrichment] = useState<WaitlistEnrichment | null>(null);
+
+  useEffect(() => {
+    if (!xUsername) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.getWaitlistEnrichment();
+        if (!cancelled) setEnrichment(data);
+      } catch {
+        // best-effort; leave card unenriched
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const cardImageUrl = xUsername
-    ? `/api/cards/waitlist?username=${encodeURIComponent(xUsername)}`
+    ? (() => {
+        const p = new URLSearchParams({ username: xUsername });
+        // Only overlay enrichment when the backend resolved the SAME handle
+        // we're rendering. Otherwise (opened with ?u=someoneelse) we'd paint
+        // the caller's score onto another user's card.
+        const showEnriched =
+          enrichment &&
+          enrichment.x_username &&
+          enrichment.x_username.toLowerCase() === xUsername.toLowerCase();
+        if (showEnriched && enrichment) {
+          if (typeof enrichment.score === 'number') {
+            p.set('score', String(Math.round(enrichment.score)));
+          }
+          if (enrichment.tier) {
+            p.set('tier', enrichment.tier);
+          }
+          if (enrichment.followers.length > 0) {
+            p.set('followers', enrichment.followers.join(','));
+            p.set('followersCount', String(enrichment.followers_count));
+          }
+        }
+        return `/api/cards/waitlist?${p.toString()}`;
+      })()
     : null;
   const referralLink = referralCode
     ? `https://t.me/${BOT_USERNAME}?start=ref_${referralCode}`

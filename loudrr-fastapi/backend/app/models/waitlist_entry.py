@@ -57,6 +57,18 @@ class WaitlistEntry(Base):
     x_link: Mapped[str] = mapped_column(
         String(500), default="", server_default=""
     )
+    # OAuth-verified at registration time (added when X OAuth became mandatory
+    # step 1 of the waitlist flow). Distinct from x_verified_previously (which
+    # tracks legacy re-approval state). Any legacy paste-in-a-URL row remains
+    # False; new registrations always have True.
+    x_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False,
+    )
+    # Immutable numeric X user id (from /users/me — string in the API but stable
+    # across handle changes). "" for pre-OAuth-flow rows.
+    x_user_id: Mapped[str] = mapped_column(
+        String(32), default="", server_default="", nullable=False,
+    )
 
     # profile data - region
     # profile data — region / niche validated by CHECK below

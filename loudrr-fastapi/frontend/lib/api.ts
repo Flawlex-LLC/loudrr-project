@@ -319,6 +319,19 @@ export interface OtherPlatformEntry {
   platform_name?: string;
 }
 
+// Waitlist card enrichment (miniapp waitlist-pending screen)
+export interface WaitlistEnrichment {
+  // The X handle the backend resolved for the caller. Frontend compares this
+  // to the handle it's about to render — enrichment is only overlaid when
+  // they match, so caller A viewing /waitlist/registered?u=someone_else can't
+  // paint their own score onto someone else's card.
+  x_username: string | null;
+  score: number | null;
+  tier: string | null;
+  followers: string[];
+  followers_count: number;
+}
+
 // API Functions
 export const api = {
   /**
@@ -482,15 +495,39 @@ export const api = {
     }>('/waitlist/status/'),
 
   /**
+   * Best-effort enrichment for the miniapp waitlist-pending card. Returns
+   * the authed user's own score + top-10 smart followers (derived server-side
+   * from their linked X handle). Backend never 500s — empty shape when
+   * analytics is down or no X handle is on file.
+   */
+  getWaitlistEnrichment: () =>
+    apiRequest<WaitlistEnrichment>('/user/waitlist-enrichment/'),
+
+  /**
+   * Kick off the waitlist-specific X OAuth flow. The backend creates a
+   * pre-signup state row (keyed on the caller's telegram_id, not a User) and
+   * returns the X authorize URL. Frontend opens it via Telegram WebApp
+   * openLink; the callback lands at /waitlist/oauth-return with a signed
+   * proof that we echo back on registerWaitlist().
+   */
+  startWaitlistXOAuth: () =>
+    apiRequest<{ authorize_url: string }>('/waitlist/x-oauth/start/', { method: 'POST' }),
+
+  /**
    * Register for waitlist directly from the mini-app. Telegram-only signup —
    * telegram_id comes from the signed initData header set by the client
-   * middleware, so it's NOT in the request body. Sends the waitlist card via
-   * Telegram on success.
+   * middleware, so it's NOT in the request body. The x_proof field is the
+   * signed itsdangerous token minted by /api/auth/x/callback/waitlist/ — the
+   * server re-verifies it and uses its embedded (verified) X handle. Sends
+   * the waitlist card via Telegram on success.
    */
-  registerWaitlist: (
-    x_link: string, referral_code?: string,
-    region?: string, niche?: string, other_platforms?: OtherPlatformEntry[]
-  ) =>
+  registerWaitlist: (body: {
+    x_proof: string;
+    referral_code?: string;
+    region?: string;
+    niche?: string;
+    other_platforms?: OtherPlatformEntry[];
+  }) =>
     apiRequest<{
       status: 'registered' | 'already_registered';
       message: string;
@@ -498,11 +535,11 @@ export const api = {
     }>('/waitlist/register/', {
       method: 'POST',
       body: JSON.stringify({
-        x_link,
-        ...(referral_code && { referral_code }),
-        ...(region && { region }),
-        ...(niche && { niche }),
-        ...(other_platforms?.length && { other_platforms }),
+        x_proof: body.x_proof,
+        ...(body.referral_code && { referral_code: body.referral_code }),
+        ...(body.region && { region: body.region }),
+        ...(body.niche && { niche: body.niche }),
+        ...(body.other_platforms?.length && { other_platforms: body.other_platforms }),
       }),
     }),
 };

@@ -7,6 +7,33 @@ export const runtime = 'edge'
 const SPACE_GROTESK_BOLD_URL = 'https://fonts.gstatic.com/s/spacegrotesk/v22/V8mQoQDjQSkFtoMM3T6r8E7mF71Q-gOoraIAEj4PVksj.ttf'
 const SYNE_BOLD_URL = 'https://fonts.gstatic.com/s/syne/v24/8vIS7w4qzmVxsWxjBZRjr0FKM_3fvj6k.ttf'
 
+// Loudrr Score tiers — mirrors backend/app/services/tier.py thresholds.
+// Score scale is 0-6000 but all tier bands live in 0..1000; anything above is GOAT.
+function tierFor(score: number): string {
+  if (score >= 1000) return 'GOAT'
+  if (score >= 800) return 'OG'
+  if (score >= 600) return 'LEGEND'
+  if (score >= 400) return 'BASED'
+  if (score >= 200) return 'DEGEN'
+  if (score >= 100) return 'NORMIE'
+  return 'ANON'
+}
+
+// Constellation slots — matches the Variant C mock (10 × 48px avatars,
+// staggered baseline so they read as scattered stars, not a bar chart).
+const SLOTS: { left: number; top: number }[] = [
+  { left: 0,   top: 6  },
+  { left: 52,  top: -2 },
+  { left: 104, top: 10 },
+  { left: 158, top: 2  },
+  { left: 212, top: 8  },
+  { left: 266, top: -4 },
+  { left: 320, top: 12 },
+  { left: 374, top: 4  },
+  { left: 426, top: -2 },
+  { left: 478, top: 9  },
+]
+
 export async function GET(request: NextRequest) {
   // Load fonts in parallel
   const [syneFontData, spaceGroteskFontData] = await Promise.all([
@@ -22,6 +49,24 @@ export async function GET(request: NextRequest) {
   const xUsername = searchParams.get('username') || 'user'
   const displayName = searchParams.get('displayName') || xUsername
   const telegramUsername = searchParams.get('telegram') || ''
+
+  // New Variant C params — all optional so old callers still render a valid card.
+  const scoreRaw = searchParams.get('score')
+  const scoreNum = scoreRaw !== null && scoreRaw !== '' ? Number(scoreRaw) : NaN
+  const hasScore = Number.isFinite(scoreNum)
+  const scoreLabel = hasScore ? Math.round(scoreNum).toLocaleString('en-US') : ''
+  const tierLabel = (searchParams.get('tier') || (hasScore ? tierFor(scoreNum) : '')).toUpperCase()
+
+  // Comma-separated X usernames of top smart followers. We proxy avatars
+  // through unavatar.io/x/<u> — deterministic per username, cached,
+  // no need to plumb image URLs through the analytics API.
+  const followersRaw = searchParams.get('followers') || ''
+  const followerUsernames = followersRaw
+    .split(',')
+    .map(s => s.trim().replace(/^@/, ''))
+    .filter(Boolean)
+    .slice(0, 10)
+  const followersCount = Number(searchParams.get('followersCount') || followerUsernames.length) || 0
 
   return new ImageResponse(
     (
@@ -50,7 +95,7 @@ export async function GET(request: NextRequest) {
             border: '1px solid rgba(255, 255, 255, 0.1)',
             position: 'relative',
             overflow: 'hidden',
-            padding: '48px 60px',
+            padding: '40px 60px 32px',
           }}
         >
           {/* Ambient glow - top */}
@@ -132,8 +177,8 @@ export async function GET(request: NextRequest) {
               display: 'flex',
               alignItems: 'center',
               gap: '14px',
-              marginBottom: '16px',
-              marginTop: '40px',
+              marginBottom: '14px',
+              marginTop: '20px',
               zIndex: 1,
             }}
           >
@@ -162,13 +207,13 @@ export async function GET(request: NextRequest) {
           <div
             style={{
               display: 'flex',
-              marginBottom: '24px',
+              marginBottom: '22px',
               zIndex: 1,
             }}
           >
             <span
               style={{
-                fontSize: '56px',
+                fontSize: '52px',
                 fontWeight: 700,
                 color: '#ffffff',
                 fontFamily: 'Space Grotesk',
@@ -179,72 +224,193 @@ export async function GET(request: NextRequest) {
             </span>
           </div>
 
-          {/* Profile section - Glassy pill */}
+          {/* Profile pill + tier chip (Variant C: chip pinned like a merit sticker) */}
           <div
             style={{
               display: 'flex',
-              alignItems: 'center',
-              gap: '28px',
-              padding: '28px 44px',
-              background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.06) 100%)',
-              borderRadius: '24px',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
+              position: 'relative',
               zIndex: 1,
+              marginBottom: '22px',
             }}
           >
-            {/* Avatar */}
             <div
               style={{
-                width: '80px',
-                height: '80px',
-                borderRadius: '50%',
-                background: 'rgba(255, 255, 255, 0.15)',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
+                gap: '28px',
+                padding: '24px 44px',
+                background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.06) 100%)',
+                borderRadius: '24px',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
               }}
             >
-              <span
+              {/* Avatar — real X profile pic via unavatar proxy. Satori will
+                  render the letter fallback (background + span) if the fetch
+                  fails; the <img> layered on top hides it when successful. */}
+              <div
                 style={{
-                  fontSize: '34px',
-                  fontWeight: 700,
-                  color: '#ffffff',
-                  fontFamily: 'Space Grotesk',
+                  width: '80px',
+                  height: '80px',
+                  borderRadius: '50%',
+                  background: 'rgba(255, 255, 255, 0.15)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  position: 'relative',
+                  overflow: 'hidden',
+                  border: '2px solid rgba(255, 255, 255, 0.15)',
                 }}
               >
-                {displayName[0]?.toUpperCase() || 'U'}
-              </span>
+                <span
+                  style={{
+                    fontSize: '34px',
+                    fontWeight: 700,
+                    color: '#ffffff',
+                    fontFamily: 'Space Grotesk',
+                  }}
+                >
+                  {displayName[0]?.toUpperCase() || 'U'}
+                </span>
+                <img
+                  src={`https://unavatar.io/x/${xUsername}?fallback=false`}
+                  width={80}
+                  height={80}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '80px',
+                    height: '80px',
+                    objectFit: 'cover',
+                  }}
+                />
+              </div>
+
+              {/* X username — verified because X OAuth is the first step of
+                  the waitlist flow now, so we no longer need the '(to be verified)'
+                  disclaimer. */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                }}
+              >
+                <svg width={26} height={26} viewBox="0 0 24 24" fill="#ffffff">
+                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                </svg>
+                <span style={{ fontSize: '32px', fontWeight: 700, color: '#ffffff', fontFamily: 'Space Grotesk', letterSpacing: '-0.5px' }}>
+                  @{xUsername}
+                </span>
+              </div>
             </div>
 
-            {/* X username + to be verified */}
+            {/* Tier chip — only when we have a real score to show */}
+            {hasScore && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '-14px',
+                  right: '-18px',
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: '10px',
+                  padding: '10px 18px',
+                  background: 'linear-gradient(135deg, #ff7a2b 0%, #f95400 100%)',
+                  borderRadius: '999px',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  boxShadow: '0 6px 24px rgba(249,84,0,0.55)',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: '28px',
+                    fontWeight: 700,
+                    color: '#0a0a0a',
+                    fontFamily: 'Syne',
+                    letterSpacing: '-0.5px',
+                    lineHeight: 1,
+                  }}
+                >
+                  {scoreLabel}
+                </span>
+                <span
+                  style={{
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    color: 'rgba(0,0,0,0.75)',
+                    fontFamily: 'Space Grotesk',
+                    letterSpacing: '2px',
+                  }}
+                >
+                  {tierLabel}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Follower constellation — top smart followers as scattered stars */}
+          {followerUsernames.length > 0 && (
             <div
               style={{
                 display: 'flex',
                 flexDirection: 'column',
-                justifyContent: 'center',
-                gap: '6px',
+                alignItems: 'center',
+                zIndex: 1,
+                marginBottom: '4px',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <svg width={26} height={26} viewBox="0 0 24 24" fill="#ffffff">
-                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
-                </svg>
-                <span style={{ fontSize: '30px', fontWeight: 600, color: '#ffffff', fontFamily: 'Space Grotesk' }}>
-                  @{xUsername}
-                </span>
+              <div
+                style={{
+                  position: 'relative',
+                  display: 'flex',
+                  width: '526px',
+                  height: '60px',
+                }}
+              >
+                {followerUsernames.map((u, i) => {
+                  const slot = SLOTS[i] || SLOTS[SLOTS.length - 1]
+                  return (
+                    <img
+                      key={u}
+                      src={`https://unavatar.io/x/${u}`}
+                      width={48}
+                      height={48}
+                      style={{
+                        position: 'absolute',
+                        left: `${slot.left}px`,
+                        top: `${slot.top + 6}px`,
+                        width: '48px',
+                        height: '48px',
+                        borderRadius: '50%',
+                        border: '2px solid rgba(10,10,10,0.9)',
+                        boxShadow: '0 0 14px rgba(249,84,0,0.35)',
+                        objectFit: 'cover',
+                      }}
+                    />
+                  )
+                })}
               </div>
-              <span style={{ fontSize: '18px', color: 'rgba(255,255,255,0.5)', fontFamily: 'Space Grotesk' }}>
-                (to be verified)
+              <span
+                style={{
+                  marginTop: '10px',
+                  fontSize: '16px',
+                  color: 'rgba(255,255,255,0.55)',
+                  fontFamily: 'Space Grotesk',
+                  letterSpacing: '0.2px',
+                }}
+              >
+                Followed by {followersCount || followerUsernames.length} smart {(followersCount || followerUsernames.length) === 1 ? 'account' : 'accounts'}
               </span>
             </div>
-          </div>
+          )}
 
           {/* Full-width divider line above bottom text */}
           <div
             style={{
               position: 'absolute',
-              bottom: '130px',
+              bottom: '110px',
               left: 0,
               width: '972px',
               height: '2px',
@@ -254,7 +420,7 @@ export async function GET(request: NextRequest) {
           />
 
           {/* Bottom section */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 'auto', gap: '8px', zIndex: 1 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 'auto', gap: '6px', zIndex: 1 }}>
             <span style={{ fontSize: '17px', color: 'rgba(255,255,255,0.55)', fontFamily: 'Space Grotesk' }}>
               We'll notify you here when you get access
             </span>

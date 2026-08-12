@@ -49,8 +49,17 @@ def is_configured() -> bool:
     return bool(settings.x_oauth_client_id and settings.x_oauth_callback_url)
 
 
-def build_authorize_url(state: str, code_challenge: str) -> str:
+def build_authorize_url(
+    state: str,
+    code_challenge: str,
+    *,
+    redirect_uri: Optional[str] = None,
+) -> str:
     """Construct the X authorize URL for a given state + PKCE challenge.
+
+    `redirect_uri` defaults to `settings.x_oauth_callback_url` (legacy flow).
+    Pass an override for a different callback (e.g. the waitlist flow, which
+    uses its own /api/auth/x/callback/waitlist/ endpoint).
 
     Raises RuntimeError if OAuth isn't configured (caller maps that to 503).
     """
@@ -59,7 +68,7 @@ def build_authorize_url(state: str, code_challenge: str) -> str:
     params = {
         "response_type": "code",
         "client_id": settings.x_oauth_client_id,
-        "redirect_uri": settings.x_oauth_callback_url,
+        "redirect_uri": redirect_uri or settings.x_oauth_callback_url,
         "scope": SCOPES,
         "state": state,
         "code_challenge": code_challenge,
@@ -68,15 +77,24 @@ def build_authorize_url(state: str, code_challenge: str) -> str:
     return f"{AUTHORIZE_URL}?{urlencode(params)}"
 
 
-async def exchange_code_for_token(code: str, code_verifier: str) -> Optional[str]:
-    """Exchange an auth code for an access token, or None on failure (logged)."""
+async def exchange_code_for_token(
+    code: str,
+    code_verifier: str,
+    *,
+    redirect_uri: Optional[str] = None,
+) -> Optional[str]:
+    """Exchange an auth code for an access token, or None on failure (logged).
+
+    `redirect_uri` MUST match the one sent to build_authorize_url — X rejects
+    the exchange otherwise. Defaults to `settings.x_oauth_callback_url`.
+    """
     auth_header = base64.b64encode(
         f"{settings.x_oauth_client_id}:{settings.x_oauth_client_secret}".encode()
     ).decode("ascii")
     body = {
         "code": code,
         "grant_type": "authorization_code",
-        "redirect_uri": settings.x_oauth_callback_url,
+        "redirect_uri": redirect_uri or settings.x_oauth_callback_url,
         "code_verifier": code_verifier,
         "client_id": settings.x_oauth_client_id,
     }

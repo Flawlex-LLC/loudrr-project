@@ -1,11 +1,12 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.core.deps import get_current_user
 from app.db.session import get_session
 from app.models.user import User
+from app.services import waitlist_x_oauth as waitlist_oauth_svc
 from app.services import x_verification as svc
 
 logger = logging.getLogger(__name__)
@@ -91,3 +92,25 @@ async def x_oauth_callback(
         content=_callback_html(result.title, result.message, result.success),
         status_code=result.status_code,
     )
+
+
+# ---- public OAuth callback for the pre-signup WAITLIST flow ----
+# X redirects the browser here after the applicant authorizes; we consume the
+# state, exchange the code, mint a signed proof, and 302 the browser back to
+# the frontend's /waitlist/oauth-return page. That page pulls the proof out of
+# the URL and hands it back to the form so submit can go through with the
+# OAuth-verified handle.
+@router.get("/api/auth/x/callback/waitlist/")
+async def x_oauth_callback_waitlist(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    db=Depends(get_session),
+) -> RedirectResponse:
+    try:
+        return await waitlist_oauth_svc.handle_waitlist_callback(
+            db, code=code, state=state, error=error,
+        )
+    except Exception:
+        logger.exception("waitlist x oauth callback failed")
+        return waitlist_oauth_svc.redirect_to_frontend(error="internal")

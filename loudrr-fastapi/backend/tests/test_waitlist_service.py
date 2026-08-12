@@ -2,13 +2,27 @@
 These exercise the service + both repositories against the real DB."""
 import pytest
 
+from app.core.crypto import sign_x_proof
 from app.core.errors import BadRequest, Conflict
+from app.core.time_utils import utcnow
 from app.schemas.waitlist import WaitlistRegisterRequest
 from app.services import waitlist as svc
 
 
-def _payload(x_link="https://x.com/alice", **kw):
-    return WaitlistRegisterRequest(x_link=x_link, **kw)
+def _proof(tg_id: int = 111, username: str = "alice", x_user_id: str = "1"):
+    return sign_x_proof({
+        "tg_id": tg_id,
+        "x_username": username,
+        "x_user_id": x_user_id,
+        "iat": int(utcnow().timestamp()),
+    })
+
+
+def _payload(*, tg_id=111, username="alice", x_user_id="1", **kw):
+    return WaitlistRegisterRequest(
+        x_proof=_proof(tg_id=tg_id, username=username, x_user_id=x_user_id),
+        **kw,
+    )
 
 
 def _tg(id=111, username="alice", first_name="Alice"):
@@ -20,41 +34,58 @@ async def test_register_creates_entry(db_session):
     assert result.was_new is True
     assert result.entry.x_username == "alice"
     assert result.entry.status == "submitted"
-    assert result.entry.referral_code  # a code was generated
+    assert result.entry.x_verified is True     # OAuth-verified at registration
+    assert result.entry.x_user_id == "1"        # from the proof payload
+    assert result.entry.referral_code           # a code was generated
 
 
 async def test_register_idempotent_on_telegram_id(db_session):
     first = await svc.register_entry(db_session, tg_user=_tg(), payload=_payload())
-    # same telegram id, different x handle -> still treated as the same user
+    # same telegram id, different x handle proof -> still treated as the same user
     second = await svc.register_entry(
         db_session, tg_user=_tg(),
-        payload=_payload(x_link="https://x.com/bob"),
+        payload=_payload(username="bob", x_user_id="2"),
     )
     assert second.was_new is False
     assert second.entry.id == first.entry.id
 
 
-async def test_register_rejects_bad_x_link(db_session):
+async def test_register_rejects_invalid_proof(db_session):
+    from app.schemas.waitlist import WaitlistRegisterRequest
+    # 40 chars clears OAuthProof's min_length=32 shape gate; the bad
+    # signature is then rejected by verify_x_proof -> BadRequest.
+    payload = WaitlistRegisterRequest(x_proof="clearly-not-a-real-token-padded-to-40-xx")
     with pytest.raises(BadRequest):
+        await svc.register_entry(db_session, tg_user=_tg(), payload=payload)
+
+
+async def test_register_rejects_proof_bound_to_other_tg_id(db_session):
+    # proof signed with tg_id=1, request auth as tg_id=2 -> reject
+    with pytest.raises(BadRequest) as exc:
         await svc.register_entry(
-            db_session, tg_user=_tg(), payload=_payload(x_link="https://x.com/home"),
+            db_session, tg_user=_tg(id=2, username="bob"),
+            payload=_payload(tg_id=1, username="alice", x_user_id="1"),
         )
+    assert "different Telegram user" in str(exc.value)
 
 
 async def test_register_rejects_duplicate_x_username(db_session):
     """Two different Telegram accounts trying to claim the same X handle
     must conflict — one X account = one waitlist entry."""
-    await svc.register_entry(db_session, tg_user=_tg(id=1), payload=_payload())
+    await svc.register_entry(db_session, tg_user=_tg(id=1), payload=_payload(tg_id=1))
     with pytest.raises(BadRequest):
         await svc.register_entry(
             db_session, tg_user=_tg(id=2, username="bob"),
-            payload=_payload(x_link="https://x.com/alice"),  # same X handle, new tg id
+            # same X handle, different tg id — proof still valid for tg=2
+            payload=_payload(tg_id=2, username="alice", x_user_id="1"),
         )
 
 
 async def test_status_lifecycle(db_session):
     assert (await svc.get_status(db_session, telegram_id=999)).status == "not_registered"
-    await svc.register_entry(db_session, tg_user=_tg(id=999), payload=_payload())
+    await svc.register_entry(
+        db_session, tg_user=_tg(id=999), payload=_payload(tg_id=999),
+    )
     assert (await svc.get_status(db_session, telegram_id=999)).status == "waitlisted"
 
 

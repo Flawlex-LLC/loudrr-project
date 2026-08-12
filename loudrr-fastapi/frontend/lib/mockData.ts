@@ -242,8 +242,24 @@ export function getMockResponse(endpoint: string): unknown | undefined {
     case '/x-oauth/start/':
       return { authorize_url: 'https://x.com/i/oauth2/authorize?mock=1' };
 
+    case '/waitlist/x-oauth/start/':
+      // In design mode the button short-circuits before calling this (see
+      // waitlist-registration.tsx) — this mock exists so a direct fetch here
+      // wouldn't 404 against the real backend, matching the shape of the
+      // legacy /x-oauth/start/ response.
+      return { authorize_url: 'https://x.com/i/oauth2/authorize?mock=waitlist' };
+
     case '/feature-interest/':
       return { registered: false, success: true };
+
+    case '/user/waitlist-enrichment/':
+      return {
+        x_username: '0xBlest_',
+        score: 450,
+        tier: 'Based',
+        followers: ['elonmusk', 'vitalikbuterin', 'balajis', 'naval', 'sama'],
+        followers_count: 5,
+      };
 
     case '/waitlist/status/':
       if (DESIGN_STATE === 'waitlisted') {

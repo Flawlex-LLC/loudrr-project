@@ -1,7 +1,8 @@
 # Coolify deploy — post-provisioning handoff
 
 Everything below was created on `server1.flawlex.co` via the Coolify API on
-2026-08-08. Nothing has been deployed yet — that's the final step you do.
+2026-08-08. **UPDATE 2026-08-12: first real deploy happened — see "Deploy-night
+learnings" at the bottom for what actually broke and how it's configured now.**
 
 ## What's live in Coolify already
 
@@ -104,3 +105,47 @@ on `Flawlex-LLC/loudrr-project` has your old fastapi tip, and the archived
 worked — earlier attempts hit Cloudflare WAF 1010 without a browser UA, and
 tried to pass a non-existent `is_build_time` field). Adapt it for future
 bulk-create / bulk-update passes against Coolify's API.
+
+## Deploy-night learnings (2026-08-12 — first real deploy)
+
+Everything below is LIVE state, discovered/fixed during the first deploy:
+
+1. **loudrr-db + loudrr-redis were stopped** — Coolify DB resources don't
+   auto-start. `GET /api/v1/databases/{uuid}/start` brings them up.
+
+2. **loudrr-db was empty** (no schema). Bootstrapped via: local create_all +
+   `alembic stamp head` + seed_settings + seed_admins into a scratch DB,
+   `pg_dump` that, apply the SQL to the prod DB. Don't run bare
+   `alembic upgrade head` on a FRESH db — the chain breaks at `d1e2f3a4b5c6`
+   (duplicate `credits_non_negative` constraint). Stamped DBs upgrade fine.
+
+3. **Frontend build failed on Coolify but not locally**: Coolify injects every
+   buildtime env var as Dockerfile ARG/ENV — including `NODE_ENV=production` —
+   so `npm ci` skipped devDependencies and `next.config.ts` couldn't load
+   (no typescript). Fixed in the Dockerfile: `npm ci --include=dev`.
+
+4. **analytics-api needs `RUN_MODE=api`** or the image's CMD falls through to
+   the crawler (`scripts/run_until_done.py`). It also listens on **8000**, not
+   8001 — `ports_exposes` and every consumer's `LOUDRR_ANALYTICS_URL` now say
+   `http://snmbna1wikpt1tz4z00jlnfm:8000`.
+
+5. **Env-var changes need a full re-DEPLOY, not "Restart"** — restart reuses
+   the old container with its baked-in env.
+
+6. **Analytics data**: restored from the 9.4GB Contabo dump
+   (`/root/loudrr-analytics-20260808-161912.dump.gz` on the Hetzner box) into
+   the postgres:18 Coolify DB (`rdkc0cdia7vhxyq4e7538931`), database
+   `loudrr_analytics` (~65GB restored: edges 32GB + eng_tweet_raw 30GB).
+   `DATABASE_URL` is set on both analytics apps. Contabo (`api.loudrr.com`)
+   is dead — 503, SSH refused.
+
+7. **dev-api/dev-app.loudrr.com 530**: these are Cloudflare Tunnel routes and
+   the tunnel daemon ran on the dead Contabo box. `cloudflared` 2026.7.3 is
+   pre-installed on the Hetzner box; finish with
+   `cloudflared service install <tunnel-token>` (token from CF Zero Trust
+   dashboard), or move the DNS records to point at 204.168.248.251 directly.
+
+8. **X OAuth for the waitlist flow** needs
+   `https://dev-api.loudrr.com/api/auth/x/callback/waitlist/` registered in
+   the X developer portal (the waitlist-specific callback,
+   `X_OAUTH_WAITLIST_CALLBACK_URL`, is already set on backend + worker).

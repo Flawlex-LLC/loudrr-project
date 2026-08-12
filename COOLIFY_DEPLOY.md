@@ -67,7 +67,9 @@ rewrites don't un-leak clones.
    Next.js bakes the new origin into the client bundle.
 
 5. **Deploy each app** — click `Deploy` on:
-   - loudrr-backend  (first — it runs alembic on boot; wait for /readyz to hit 200)
+   - loudrr-backend  (first — NOTE: alembic does NOT auto-run on boot; after any
+     deploy carrying new migrations, run `docker exec <backend-container> alembic
+     upgrade head` on the box, then check /readyz)
    - loudrr-analytics-api  (parallel with backend)
    - loudrr-frontend
    - loudrr-worker

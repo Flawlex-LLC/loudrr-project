@@ -23,6 +23,17 @@ def _serializer() -> URLSafeTimedSerializer:
 
 def sign_x_proof(payload: dict[str, Any]) -> str:
     """Sign an arbitrary JSON-serializable dict → URL-safe token."""
+    # The dev default is public knowledge — a proof signed with it is
+    # forgeable by anyone. Refuse to MINT outside debug (the prod-guard in
+    # config.py already blocks ENVIRONMENT=prod; this catches staging-ish
+    # deployments that forgot both). Verification is deliberately unchanged.
+    if (
+        settings.secret_key == "dev-insecure-secret-change-me"
+        and not settings.debug
+    ):
+        raise RuntimeError(
+            "refusing to sign OAuth proofs with the dev default SECRET_KEY"
+        )
     return _serializer().dumps(payload)
 
 

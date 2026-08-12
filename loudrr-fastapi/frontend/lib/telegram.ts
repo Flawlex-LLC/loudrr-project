@@ -106,6 +106,19 @@ export function initTelegramWebApp() {
   if (tg) {
     tg.ready();
     tg.expand();
+
+    // Capture referral start_param (t.me/<bot>/app?startapp=ref_<code>) into
+    // sessionStorage BEFORE any router.replace drops query params. The
+    // waitlist registration screen reads 'loudrr_ref' as a fallback.
+    try {
+      const sp = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.start_param;
+      if (typeof sp === 'string') {
+        const match = sp.match(/^ref_(.+)$/);
+        if (match) sessionStorage.setItem('loudrr_ref', match[1]);
+      }
+    } catch {
+      // sessionStorage unavailable — referral attribution is best-effort.
+    }
   }
 }
 

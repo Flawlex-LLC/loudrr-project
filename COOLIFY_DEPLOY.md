@@ -21,26 +21,23 @@ learnings" at the bottom for what actually broke and how it's configured now.**
 **Databases** (both auto-generated, using internal docker hostnames for
 inter-container comms — no public port):
 
-| Service         | UUID                       | Internal URL                                                                                                                                             |
-| --------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Postgres 16     | ms0q1gaxez5paxfnl5yjm08w   | `postgresql+asyncpg://loudrr:loudrr_prod_1786148775@ms0q1gaxez5paxfnl5yjm08w:5432/loudrr`                                                                |
-| Redis 7         | a25xzfeqa1z0zb619yvjxps4   | `redis://default:bJ8EvKjjaKLDg0haplr10Nv1OAP7bncuVvEoycbHjeSDn9m6URokfhOcq7hMwTwN@a25xzfeqa1z0zb619yvjxps4:6379/0`                                       |
+| Service         | UUID                       | Internal URL                                                                              |
+| --------------- | -------------------------- | ----------------------------------------------------------------------------------------- |
+| Postgres 16     | ms0q1gaxez5paxfnl5yjm08w   | `postgresql+asyncpg://loudrr:<password>@ms0q1gaxez5paxfnl5yjm08w:5432/loudrr` (password: see DATABASE_URL in Coolify env) |
+| Redis 7         | a25xzfeqa1z0zb619yvjxps4   | `redis://default:<password>@a25xzfeqa1z0zb619yvjxps4:6379/0` (password: see REDIS_URL in Coolify env) |
 
 **Env vars seeded** (65 total via API):
 - Backend + worker: 29 each (DATABASE_URL / REDIS_URL / gateway keys / TG token / X OAuth / secrets / SITE_URL placeholder)
 - Frontend: 3 (BACKEND_ORIGIN → internal backend hostname, NEXT_PUBLIC_ADMIN_API_URL, NODE_ENV)
 - Analytics × 2: 2 each (GATEWAY_BASE_URL, LOUDRR_GATEWAY_API)
 
-## Secrets (SAVE THESE — I can't retrieve them later)
+## Secrets
 
-Auto-generated at seed time. Ideally you'll rotate to your own values in the Coolify
-env-vars UI, but until then these are what's live:
-
-```
-SECRET_KEY       = -hrD1bsy50PWuvi0ABoDJACrlVMRlnPtJNF0j9YzPDUZL1QW2Twn9cnMGa1I7IhR
-ADMIN_PASSWORD   = NDsgdXuaGsbuvYKxxMIQaTTw
-ENCRYPTION_KEY   = 0779093af386e2a522747d3144d6b688
-```
+**ROTATED 2026-08-12** — the values that used to sit in this file (and remain in
+git history) are INVALID. Live values are in the Coolify env-vars UI and mirrored
+in the gitignored `.env.infra` (`LOUDRR_SECRET_KEY` / `LOUDRR_ADMIN_PASSWORD` /
+`LOUDRR_ENCRYPTION_KEY`). Never commit secret values to this file again — history
+rewrites don't un-leak clones.
 
 ## Before you hit deploy — final 5 clicks
 

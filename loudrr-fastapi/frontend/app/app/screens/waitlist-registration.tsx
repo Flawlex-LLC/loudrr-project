@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { hapticFeedback, openLink } from '@/lib/telegram';
 import { api, OtherPlatformEntry } from '@/lib/api';
 import { DESIGN_MODE } from '@/lib/mockData';
@@ -83,12 +83,19 @@ export function WaitlistRegistrationScreen({
   const [waitingForOAuth, setWaitingForOAuth] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Get referral code from URL query param (e.g., ?ref=ABC123)
+  // Get referral code from URL query param (e.g., ?ref=ABC123), falling back
+  // to the value stashed in sessionStorage by the Telegram start_param capture
+  // (startapp deep links don't survive router.replace as query params).
   const [referralCode, setReferralCode] = useState<string | null>(null);
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      const ref = params.get('ref');
+      let ref = params.get('ref');
+      if (!ref) {
+        try {
+          ref = sessionStorage.getItem('loudrr_ref');
+        } catch { /* sessionStorage unavailable */ }
+      }
       if (ref) {
         setReferralCode(ref);
         console.log('Referral code detected:', ref);
@@ -148,14 +155,55 @@ export function WaitlistRegistrationScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Guard against overlapping server-side proof polls.
+  const proofPollInFlight = useRef(false);
+
   // While waiting for OAuth to return, poll sessionStorage + listen for
   // window focus (Telegram in-app browser fires visibilitychange when the
   // user swipes back to the WebView).
+  //
+  // ALSO poll the backend for a server-stored proof: inside Telegram,
+  // openLink() completes the OAuth chain in the external SYSTEM browser,
+  // whose sessionStorage the mini-app WebView can never see. The backend
+  // stores the minted proof keyed by telegram_id; we fetch and consume it
+  // here, then feed it through the same sessionStorage path.
   useEffect(() => {
     if (!waitingForOAuth || xProof) return;
+    const pollServerProof = async () => {
+      if (DESIGN_MODE || proofPollInFlight.current) return;
+      proofPollInFlight.current = true;
+      try {
+        const { proof } = await api.pollWaitlistXOAuthProof();
+        if (proof) {
+          try {
+            sessionStorage.setItem(PROOF_KEY, proof);
+            sessionStorage.setItem(PROOF_IAT_KEY, String(Date.now()));
+          } catch { /* sessionStorage unavailable */ }
+          // The server row is consumed (one-shot DELETE...RETURNING) — never
+          // depend on the sessionStorage round-trip alone. If the stored copy
+          // isn't readable back, apply the proof to state directly so it
+          // can't be lost.
+          if (!consumeStoredProof()) {
+            setXProof(proof);
+            setXUsername(decodeProofUsername(proof));
+            setStep(s => (s < 2 ? 2 : s));
+            setWaitingForOAuth(false);
+            setError(null);
+            hapticFeedback('success');
+          }
+        }
+      } catch {
+        // best-effort — keep polling
+      } finally {
+        proofPollInFlight.current = false;
+      }
+    };
+    // 2.5s = 24 requests/minute, safely under the endpoint's 30/minute limit
+    // (a 1.5s tick would trip 429s after ~45s of waiting).
     const interval = window.setInterval(() => {
       consumeStoredProof();
-    }, 1500);
+      void pollServerProof();
+    }, 2500);
     const onVisibility = () => {
       if (document.visibilityState === 'visible') consumeStoredProof();
     };
@@ -226,8 +274,37 @@ export function WaitlistRegistrationScreen({
     }
   };
 
+  // Full reset back to step 1 when the proof is expired/invalid — clears the
+  // stored proof and asks the user to re-connect X.
+  const resetToConnectX = useCallback(() => {
+    try {
+      sessionStorage.removeItem(PROOF_KEY);
+      sessionStorage.removeItem(PROOF_IAT_KEY);
+    } catch { /* ignore */ }
+    setXProof(null);
+    setXUsername(null);
+    setWaitingForOAuth(false);
+    setStep(1);
+    setError('Your X session expired. Please connect X again.');
+    hapticFeedback('error');
+  }, []);
+
   const handleSubmit = async () => {
     if (!xProof || !xUsername || !region || !niche) return;
+
+    // Belt-and-braces freshness re-check before hitting the network — the
+    // proof may have aged out while the user lingered on steps 2/3.
+    if (!DESIGN_MODE) {
+      let iat = NaN;
+      try {
+        const iatStr = sessionStorage.getItem(PROOF_IAT_KEY);
+        iat = iatStr ? Number(iatStr) : NaN;
+      } catch { /* sessionStorage unavailable — let the server decide */ }
+      if (Number.isFinite(iat) && Date.now() - iat >= PROOF_MAX_AGE_MS) {
+        resetToConnectX();
+        return;
+      }
+    }
 
     setLoading(true);
     setError(null);
@@ -257,8 +334,16 @@ export function WaitlistRegistrationScreen({
         onSuccess({ x_username: xUsername, referral_code: result.referral_code });
       }
     } catch (err: any) {
-      setError(err.message || 'Registration failed');
-      hapticFeedback('error');
+      const msg: string = err?.message || 'Registration failed';
+      // Server rejected the proof (expired/invalid/wrong Telegram user) —
+      // bounce back to step 1 so the user can re-connect instead of being
+      // stuck 400-ing on step 3.
+      if (/OAuth proof|different Telegram user/i.test(msg)) {
+        resetToConnectX();
+      } else {
+        setError(msg);
+        hapticFeedback('error');
+      }
     } finally {
       setLoading(false);
     }

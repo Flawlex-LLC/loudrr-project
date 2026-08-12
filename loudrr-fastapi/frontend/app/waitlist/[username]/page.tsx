@@ -23,8 +23,8 @@ async function loadEnrichment(username: string): Promise<Enrichment> {
   const qs = `userName=${encodeURIComponent(username)}`
 
   const [profileRes, followersRes] = await Promise.allSettled([
-    fetch(`${base}/v1/profile?${qs}`, { headers, next: { revalidate: 300 } }),
-    fetch(`${base}/v1/top-followers?${qs}&k=10`, { headers, next: { revalidate: 300 } }),
+    fetch(`${base}/v1/profile?${qs}`, { headers, next: { revalidate: 60 } }),
+    fetch(`${base}/v1/top-followers?${qs}&k=10`, { headers, next: { revalidate: 60 } }),
   ])
 
   let score: number | undefined

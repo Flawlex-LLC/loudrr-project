@@ -249,12 +249,20 @@ export function getMockResponse(endpoint: string): unknown | undefined {
       // legacy /x-oauth/start/ response.
       return { authorize_url: 'https://x.com/i/oauth2/authorize?mock=waitlist' };
 
+    case '/waitlist/x-oauth/proof/':
+      // Server-side proof handoff poll — design mode never has one pending
+      // (the Connect X button short-circuits with a fake proof instead).
+      return { proof: null };
+
     case '/feature-interest/':
       return { registered: false, success: true };
 
     case '/user/waitlist-enrichment/':
       return {
-        x_username: '0xBlest_',
+        // Must match mockUser.x_username — the waitlist-pending screen only
+        // overlays enrichment when the backend-resolved handle equals the one
+        // being rendered, so a mismatch here hides the overlay in design mode.
+        x_username: 'alexrivera',
         score: 450,
         tier: 'Based',
         followers: ['elonmusk', 'vitalikbuterin', 'balajis', 'naval', 'sama'],

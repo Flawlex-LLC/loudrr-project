@@ -7,7 +7,7 @@ hundreds of inputs per property and, on failure, shrinks to the smallest
 breaking example.
 
 Two layers:
-  * pure functions (tier math, karma, X-URL parsing, HMAC) — fast, no DB.
+  * pure functions (tier math, karma, HMAC) — fast, no DB.
   * the credit ledger — drives the real CreditService against Postgres to prove
     no random earn/spend/penalty sequence can corrupt a balance.
 """
@@ -15,7 +15,6 @@ import asyncio
 import hashlib
 import hmac
 import json
-import re
 import time
 import uuid
 from decimal import Decimal
@@ -36,11 +35,9 @@ from app.services import site_settings, tier
 from app.services.credits import (
     CreditService, DailyCapReachedError, InsufficientCreditsError,
 )
-from app.services.x_url import extract_x_username
 
 TEST_DATABASE_URL = app_settings.database_url.rsplit("/", 1)[0] + "/loudrr_test"
 
-_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
 _MULTIPLIERS = {
     Decimal("1.00"), Decimal("1.10"), Decimal("1.15"), Decimal("1.20"),
     Decimal("1.25"), Decimal("1.30"), Decimal("1.35"),
@@ -96,19 +93,6 @@ def test_anon_score_leaves_base_unchanged(base, score):
     karma, mult = tier.karma_for(base, score)
     assert mult == Decimal("1.00")
     assert karma == base.quantize(Decimal("0.0001"))
-
-
-# ============================ pure: X username extraction ============================
-@given(s=st.text(max_size=300))
-def test_extract_never_raises_and_output_is_always_valid(s):
-    out = extract_x_username(s)        # must never raise on arbitrary text
-    if out is not None:
-        assert _USERNAME_RE.match(out)  # any non-None result is a syntactically valid handle
-
-
-@given(name=st.from_regex(r"[A-Za-z0-9_]{1,15}", fullmatch=True))
-def test_bare_valid_username_round_trips(name):
-    assert extract_x_username(name) == name
 
 
 # ============================ pure: Telegram HMAC auth ============================

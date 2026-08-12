@@ -20,7 +20,7 @@ import logging
 import re
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.db.models import SmartSetMember
 from app.db.session import Base, SessionLocal, engine
@@ -265,7 +265,6 @@ def scrape_gmgn_token_traders(proxies: list[str] | None = None,
 
     # 2) per token, pull top traders and keep the handle-linked ones
     out: dict[tuple[str, str], dict] = {}
-    gmgn_chain = {"sol": "sol", "evm": "eth"}   # token_traders path wants a concrete chain id
     for label, token in tokens:
         path_chain = "sol" if label == "sol" else "eth"  # EVM top-traders share the eth route id
         data = _get(f"https://gmgn.ai/vas/api/v1/token_traders/{path_chain}/{token}"

@@ -100,6 +100,48 @@ async def test_register_expired_x_proof_returns_400(client, monkeypatch):
     assert "error" in r.json()
 
 
+async def test_register_idempotent_with_expired_proof(client, monkeypatch):
+    """Already-registered users must get 'already_registered' even when the
+    proof they echo back has expired — the idempotency check runs BEFORE
+    proof verification (the documented idempotency contract)."""
+    first = await client.post(
+        "/waitlist/register/", params={"telegram_id": 111}, json=_body()
+    )
+    assert first.status_code == 200
+
+    import app.services.waitlist_x_oauth as svc
+
+    real_verify = svc.verify_x_proof
+
+    def expired_verify(token):
+        return real_verify(token, max_age_seconds=-1)
+
+    monkeypatch.setattr(svc, "verify_x_proof", expired_verify)
+
+    r = await client.post(
+        "/waitlist/register/", params={"telegram_id": 111}, json=_body()
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "already_registered"
+
+
+async def test_register_duplicate_x_user_id_400(client):
+    """Two different Telegram users, two DIFFERENT handles, but the SAME
+    immutable X user id (a rename between authorizations) — the second
+    registration must be rejected: one X account backs one entry."""
+    r1 = await client.post(
+        "/waitlist/register/", params={"telegram_id": 111},
+        json=_body(x_proof=_proof(tg_id=111, username="alice", x_user_id="424242")),
+    )
+    assert r1.status_code == 200
+    r2 = await client.post(
+        "/waitlist/register/", params={"telegram_id": 222},
+        json=_body(x_proof=_proof(tg_id=222, username="alice_renamed", x_user_id="424242")),
+    )
+    assert r2.status_code == 400
+    assert "X account already registered" in r2.json()["error"]
+
+
 async def test_register_requires_auth_401(client):
     # no ?telegram_id and no init-data header -> Unauthorized
     r = await client.post("/waitlist/register/", json=_body())

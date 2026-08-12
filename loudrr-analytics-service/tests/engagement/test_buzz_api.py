@@ -6,7 +6,7 @@ Invariants:
   * signal leaderboard ranks by weighted signal count, carries public score + tier + followers,
   * NEVER 500s: unknown contract / internal failure -> 200 coverage:"none".
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -15,7 +15,7 @@ from app.db.models import RankedAccount
 from app.engagement import models as em
 
 C = "So1TokenContract1111111111111111111111111111"
-NOW = datetime.utcnow()
+NOW = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC, matching app.core.util convention
 
 
 def _call(tweet_id, member_id, days_ago, ticker="AAA"):

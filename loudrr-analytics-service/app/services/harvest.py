@@ -28,7 +28,6 @@ from app.clients.sorsa import (
     SorsaQuotaError,
     SorsaTransientError,
 )
-from app.core.config import settings
 from app.db.models import HarvestedScore
 from app.db.session import SessionLocal
 from app.services.calibration import _upsert_harvested

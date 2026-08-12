@@ -58,6 +58,28 @@ async def start_x_oauth(
     return {"authorize_url": url}
 
 
+@router.get("/x-oauth/proof/")
+@limiter.limit("30/minute")
+async def poll_x_oauth_proof(
+    request: Request,
+    tg_user: dict = Depends(get_telegram_identity),
+    db=Depends(get_session),
+):
+    """One-time poll for a server-side stored OAuth proof.
+
+    Telegram's openLink() completes the OAuth chain in the SYSTEM browser, so
+    the mini-app WebView can never see the sessionStorage written there. The
+    callback also upserts the minted proof keyed by telegram_id; the mini-app
+    polls this endpoint and receives the proof exactly once (atomic
+    DELETE ... RETURNING), or null when there's nothing (yet) to consume.
+    """
+    telegram_id = tg_user.get("id")
+    if not telegram_id:
+        raise BadRequest("Missing Telegram ID")
+    proof = await oauth_svc.consume_proof(db, telegram_id=telegram_id)
+    return {"proof": proof}
+
+
 @router.get("/status/")
 async def waitlist_status(
     tg_user: dict = Depends(get_telegram_identity),

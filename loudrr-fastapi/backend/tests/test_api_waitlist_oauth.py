@@ -6,13 +6,18 @@ scaffolding pattern from test_integrations_x_oauth.py to stub the two
 outbound HTTP calls (token exchange + /users/me).
 """
 from datetime import timedelta
+from urllib.parse import quote_plus
 
+import pytest
 from sqlalchemy import select
 
 from app.core.crypto import sign_x_proof, verify_x_proof
+from app.core.errors import BadRequest
 from app.core.time_utils import utcnow
 from app.integrations import x_oauth
+from app.models.waitlist_oauth_proof import WaitlistOAuthProof
 from app.models.waitlist_oauth_state import WaitlistOAuthState
+from app.services import waitlist_x_oauth as waitlist_oauth_svc
 
 
 # --------------------------------------------------------------------------
@@ -42,6 +47,37 @@ def test_proof_expired_rejected():
     assert verify_x_proof(token, max_age_seconds=-1) is None
 
 
+def test_verify_and_extract_rejects_malformed_proof():
+    # correctly signed, but the payload is missing x_username — a proof our
+    # own callback would never mint. Signature passes, shape check must fail.
+    token = sign_x_proof({"tg_id": 7, "x_user_id": "9"})
+    with pytest.raises(BadRequest, match="Malformed X OAuth proof"):
+        waitlist_oauth_svc.verify_and_extract(token, telegram_id=7)
+
+
+# --------------------------------------------------------------------------
+# _frontend_origin fallback chain
+# --------------------------------------------------------------------------
+def test_frontend_origin_strips_app_suffix(monkeypatch):
+    monkeypatch.setattr(
+        waitlist_oauth_svc.settings, "miniapp_url", "https://app.example.com/app"
+    )
+    monkeypatch.setattr(waitlist_oauth_svc.settings, "site_url", "https://site.example.com")
+    assert waitlist_oauth_svc._frontend_origin() == "https://app.example.com"
+
+
+def test_frontend_origin_falls_back_to_site_url(monkeypatch):
+    monkeypatch.setattr(waitlist_oauth_svc.settings, "miniapp_url", "")
+    monkeypatch.setattr(waitlist_oauth_svc.settings, "site_url", "https://site.example.com/")
+    assert waitlist_oauth_svc._frontend_origin() == "https://site.example.com"
+
+
+def test_frontend_origin_defaults_to_localhost(monkeypatch):
+    monkeypatch.setattr(waitlist_oauth_svc.settings, "miniapp_url", "")
+    monkeypatch.setattr(waitlist_oauth_svc.settings, "site_url", "")
+    assert waitlist_oauth_svc._frontend_origin() == "http://localhost:3000"
+
+
 # --------------------------------------------------------------------------
 # POST /waitlist/x-oauth/start/
 # --------------------------------------------------------------------------
@@ -59,6 +95,12 @@ async def test_start_oauth_returns_authorize_url(client, db_session, monkeypatch
     assert r.status_code == 200
     url = r.json()["authorize_url"]
     assert url.startswith(x_oauth.AUTHORIZE_URL + "?")
+    # the WAITLIST callback (urlencoded) is what X will redirect to — not the
+    # legacy x_oauth_callback_url
+    assert (
+        "redirect_uri="
+        + quote_plus("https://api.example.com/api/auth/x/callback/waitlist/")
+    ) in url
     # a state row was persisted keyed to that telegram_id
     rows = (
         await db_session.execute(
@@ -222,6 +264,63 @@ async def test_callback_token_exchange_fails_302s_error(client, db_session, monk
     )
     assert r.status_code == 302
     assert "error=token" in r.headers["location"]
+
+
+# --------------------------------------------------------------------------
+# GET /waitlist/x-oauth/proof/ — server-side proof handoff for Telegram WebView
+# --------------------------------------------------------------------------
+async def test_proof_poll_no_row_returns_null(client):
+    r = await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 555})
+    assert r.status_code == 200
+    assert r.json() == {"proof": None}
+
+
+async def test_proof_poll_after_callback_returns_proof_once(client, db_session, monkeypatch):
+    """The callback upserts the proof server-side; the poll endpoint hands it
+    out exactly once (atomic DELETE ... RETURNING), then null again."""
+    monkeypatch.setattr(x_oauth.settings, "x_oauth_client_id", "cid")
+    monkeypatch.setattr(x_oauth.settings, "x_oauth_client_secret", "sec")
+    monkeypatch.setattr(x_oauth.settings, "x_oauth_callback_url", "https://cb/")
+    monkeypatch.setattr(x_oauth.settings, "x_oauth_waitlist_callback_url", "https://cb/w/")
+    monkeypatch.setattr(x_oauth.settings, "miniapp_url", "https://app.example.com/app")
+
+    await _seed_state(db_session, telegram_id=555, state="handoff-state")
+    _install_fake_http(monkeypatch, responses=[
+        _FakeResponse(200, {"access_token": "tok"}),
+        _FakeResponse(200, {"data": {"id": "999", "username": "alice", "name": "Alice"}}),
+    ])
+    r = await client.get(
+        "/api/auth/x/callback/waitlist/",
+        params={"code": "the-code", "state": "handoff-state"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 302
+    minted = r.headers["location"].split("proof=", 1)[1]
+
+    # first poll: the stored proof, identical to the one in the redirect
+    r1 = await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 555})
+    assert r1.status_code == 200
+    assert r1.json()["proof"] == minted
+    payload = verify_x_proof(r1.json()["proof"])
+    assert payload["tg_id"] == 555
+
+    # second poll: consumed — null
+    r2 = await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 555})
+    assert r2.json() == {"proof": None}
+
+
+async def test_proof_poll_stale_row_returns_null(client, db_session):
+    # a row older than PROOF_TTL_SECONDS is dead — the register endpoint
+    # would reject the token anyway, so the poll must not hand it out
+    db_session.add(WaitlistOAuthProof(
+        telegram_id=777,
+        proof="stale-proof-token",
+        created_at=utcnow() - timedelta(seconds=601),
+    ))
+    await db_session.commit()
+    r = await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 777})
+    assert r.status_code == 200
+    assert r.json() == {"proof": None}
 
 
 async def test_callback_fetch_me_fails_302s_error(client, db_session, monkeypatch):

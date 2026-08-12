@@ -1,18 +1,14 @@
 """Input-validation & hostile-input hardening.
 
 Bad input is rejected at the edge (Pydantic / parsers) before it can reach the
-DB, and the service caps/normalizes what it stores. Complements test_x_url.py
-(which covers the standard valid/invalid matrix) with the nasty cases.
+DB, and the service caps/normalizes what it stores.
 """
 from types import SimpleNamespace
-
-import pytest
 
 from app.core.crypto import sign_x_proof
 from app.core.time_utils import utcnow
 from app.schemas.waitlist import OtherPlatform, OtherPlatformKind
 from app.services import waitlist as waitlist_svc
-from app.services.x_url import extract_x_username
 
 
 def _proof(tg_id: int, username: str, x_user_id: str = "1"):
@@ -22,27 +18,6 @@ def _proof(tg_id: int, username: str, x_user_id: str = "1"):
         "x_user_id": x_user_id,
         "iat": int(utcnow().timestamp()),
     })
-
-
-# ---- X username extraction: hostile inputs all resolve to None ----
-@pytest.mark.parametrize(
-    "bad",
-    [
-        "café",                       # non-ASCII letters
-        "naïve_user",                 # mixed unicode
-        "你好",                        # CJK
-        "a" * 16,                     # 16 chars — one past the 15 limit
-        "https://x.com/" + "a" * 16,  # overlong username in a URL path
-        "user name",                  # space
-        "user-name",                  # hyphen not allowed
-        "https://x.com/",             # no path
-        "https://notx.com/user",      # wrong host
-        "",                           # empty
-        "   ",                        # whitespace only
-    ],
-)
-def test_extract_x_username_rejects_hostile(bad):
-    assert extract_x_username(bad) is None
 
 
 # ---- waitlist register endpoint: malformed body is a 422, never a 500 ----

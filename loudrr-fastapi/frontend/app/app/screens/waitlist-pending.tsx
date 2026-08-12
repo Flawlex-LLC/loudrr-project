@@ -59,8 +59,11 @@ export function WaitlistPendingScreen({ xUsername, referralCode }: { xUsername?:
         return `/api/cards/waitlist?${p.toString()}`;
       })()
     : null;
+  // Direct mini-app deep link — startapp lands in the WebView with
+  // initDataUnsafe.start_param set, so the referral survives into the app
+  // (a plain ?start= bot link would need a /start handler to forward it).
   const referralLink = referralCode
-    ? `https://t.me/${BOT_USERNAME}?start=ref_${referralCode}`
+    ? `https://t.me/${BOT_USERNAME}/app?startapp=ref_${referralCode}`
     : `https://t.me/${BOT_USERNAME}`;
   const shareText = `I just joined the @loudrrHQ waitlist!\n\nJoin me 👇\n${referralLink}`;
 

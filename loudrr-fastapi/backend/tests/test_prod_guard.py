@@ -5,7 +5,6 @@ This test is the SAFETY NET against the audit's #1 GTM risk: shipping with
 impersonate any other user with a query param). The guard fires at module
 import time when ENVIRONMENT=prod combines with any dev-only value.
 """
-import os
 import sys
 
 import pytest

@@ -29,12 +29,6 @@ export interface EngageData {
   isClaimLoading: boolean;
 }
 
-export type WaitlistData = {
-  x_username?: string;
-  submitted_at?: string;
-  referral_code?: string;
-};
-
 // ---- Constants ------------------------------------------------------------
 
 export const STALE_THRESHOLD_MS = 20 * 60 * 1000; // 20 minutes

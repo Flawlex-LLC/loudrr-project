@@ -48,13 +48,12 @@ export async function GET(request: NextRequest) {
   const { searchParams } = url
   const xUsername = searchParams.get('username') || 'user'
   const displayName = searchParams.get('displayName') || xUsername
-  const telegramUsername = searchParams.get('telegram') || ''
 
   // New Variant C params — all optional so old callers still render a valid card.
   const scoreRaw = searchParams.get('score')
   const scoreNum = scoreRaw !== null && scoreRaw !== '' ? Number(scoreRaw) : NaN
-  const hasScore = Number.isFinite(scoreNum)
-  const scoreLabel = hasScore ? Math.round(scoreNum).toLocaleString('en-US') : ''
+  const hasScore = Number.isFinite(scoreNum) && scoreNum >= 0
+  const scoreLabel = hasScore ? Math.round(Math.min(scoreNum, 99999)).toLocaleString('en-US') : ''
   const tierLabel = (searchParams.get('tier') || (hasScore ? tierFor(scoreNum) : '')).toUpperCase()
 
   // Comma-separated X usernames of top smart followers. We proxy avatars
@@ -66,7 +65,8 @@ export async function GET(request: NextRequest) {
     .map(s => s.trim().replace(/^@/, ''))
     .filter(Boolean)
     .slice(0, 10)
-  const followersCount = Number(searchParams.get('followersCount') || followerUsernames.length) || 0
+  const parsedFollowersCount = Number(searchParams.get('followersCount') || followerUsernames.length) || 0
+  const followersCount = Math.max(0, Math.min(parsedFollowersCount, 9999))
 
   return new ImageResponse(
     (

@@ -53,6 +53,9 @@ function OAuthReturnInner() {
       <div className="text-center">
         <div className="w-8 h-8 border-2 border-white/20 border-t-[#f95400] rounded-full animate-spin mx-auto mb-4" />
         <p className="text-sm">Returning to Loudrr…</p>
+        <p className="text-sm mt-2" style={{ color: 'rgba(255,255,255,0.35)' }}>
+          Opened from Telegram? You can close this window and return to the app.
+        </p>
       </div>
     </div>
   );

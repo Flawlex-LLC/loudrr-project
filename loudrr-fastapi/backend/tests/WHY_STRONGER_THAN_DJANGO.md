@@ -70,7 +70,6 @@ with a clean "insufficient credits" instead of a deadlock error.
 | Escrow smaller than the award | partial payment, post auto-completes, never overdraws escrow |
 | Daily cap reached | award skipped, escrow preserved (no partial corruption) |
 | Malformed input (bad email, bad UUID, missing field) | `422` at the schema edge, never reaches a service (`test_input_validation.py`, `test_click_malformed_uuid_422`) |
-| Hostile X usernames (unicode, >15 chars, system paths) | rejected to `None` (`test_extract_x_username_rejects_hostile`) |
 
 Banned enforcement in Django lives in scattered view code; here it's applied
 consistently in the services, so every entry point (HTTP, background task, future
@@ -96,7 +95,6 @@ that must hold for *all* inputs and Hypothesis searches for a counter-example:
 
 - tier multipliers always in the known band and monotonic in score;
 - karma always 4dp, never below base, never above the top-tier bound;
-- `extract_x_username` never raises and only ever returns a syntactically valid handle;
 - correctly-signed Telegram init-data always verifies; any wrong token is rejected;
 - **the ledger never corrupts**: for any random sequence of earn/spend/penalty, the
   real `CreditService` keeps `credits >= 0` and `earned >= spent`
@@ -105,8 +103,9 @@ that must hold for *all* inputs and Hypothesis searches for a counter-example:
 On its first run it **found a real bug** the 11-case hand-written hostile-input test
 missed: `extract_x_username("[")` raised `ValueError: Invalid IPv6 URL` from `urlparse`
 instead of returning `None` — i.e. an unhandled 500 on a hostile X link in the waitlist
-flow. Fixed in `x_url.py` (parse failures now return `None`). That single finding
-justifies the whole approach.
+flow. That single finding justifies the whole approach. (Historical note: the
+`x_url.py` paste-a-link parser and its tests were removed once X OAuth became the
+mandatory waitlist step — the handle now comes from X's `/users/me`, not user input.)
 
 ## 6. Coverage delta
 
@@ -115,7 +114,7 @@ Before: 152 tests   (happy-path heavy, thin on sad/error/edge/concurrency)
 After:  210 tests   (+58)
 New/expanded:
   + test_db_constraints.py        12  (corruption-proofing — the headline)
-  + test_properties.py            10  (Hypothesis: pure math + ledger invariant; found the x_url crash)
+  + test_properties.py            10  (Hypothesis: pure math + ledger invariant; found the x_url crash — x_url since removed)
   + test_input_validation.py       8  (hostile input, capping, normalization)
   + test_credits.py               +7  (penalty floor/clamp, non-positive, idempotent replay)
   + test_banned_enforcement.py     4  (ban applied everywhere money moves)

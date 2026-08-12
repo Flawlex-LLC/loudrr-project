@@ -1,9 +1,10 @@
 import logging
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.core.deps import get_current_user
+from app.core.limiter import limiter
 from app.db.session import get_session
 from app.models.user import User
 from app.services import waitlist_x_oauth as waitlist_oauth_svc
@@ -71,7 +72,9 @@ def _callback_html(title: str, message: str, success: bool = True) -> str:
 
 
 @router.get("/api/auth/x/callback/")
+@limiter.limit("30/minute")  # public unauthenticated endpoint — cap abuse
 async def x_oauth_callback(
+    request: Request,                                # slowapi needs the IP
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),
@@ -101,7 +104,9 @@ async def x_oauth_callback(
 # the URL and hands it back to the form so submit can go through with the
 # OAuth-verified handle.
 @router.get("/api/auth/x/callback/waitlist/")
+@limiter.limit("30/minute")  # public unauthenticated endpoint — cap abuse
 async def x_oauth_callback_waitlist(
+    request: Request,                                # slowapi needs the IP
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),

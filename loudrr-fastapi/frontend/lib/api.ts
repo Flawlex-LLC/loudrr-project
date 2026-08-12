@@ -15,7 +15,7 @@ const LOUD_API_BASE_URL = typeof window !== 'undefined' && window.location.hostn
   : (process.env.NEXT_PUBLIC_API_URL?.replace('/api/miniapp', '/api/loud') || 'http://localhost:8000/api/loud');
 
 // Debug telegram ID for local testing (only used when not in Telegram)
-const DEBUG_TELEGRAM_ID = process.env.NEXT_PUBLIC_DEBUG_TELEGRAM_ID || '6451704338';
+const DEBUG_TELEGRAM_ID = process.env.NEXT_PUBLIC_DEBUG_TELEGRAM_ID || '';
 
 // Get Telegram Web App init data
 function getTelegramInitData(): string {
@@ -512,6 +512,15 @@ export const api = {
    */
   startWaitlistXOAuth: () =>
     apiRequest<{ authorize_url: string }>('/waitlist/x-oauth/start/', { method: 'POST' }),
+
+  /**
+   * Poll for a server-stored OAuth proof (Telegram WebView flow). When the
+   * OAuth chain completes in the external system browser, sessionStorage
+   * there is invisible to the mini-app WebView — so the backend stores the
+   * minted proof keyed by telegram_id and we poll for it here. Single-use:
+   * the backend deletes the row on read.
+   */
+  pollWaitlistXOAuthProof: () => apiRequest<{ proof: string | null }>('/waitlist/x-oauth/proof/'),
 
   /**
    * Register for waitlist directly from the mini-app. Telegram-only signup —

@@ -21,7 +21,13 @@ from app.core.crypto import sign_x_proof, verify_x_proof
 from app.core.errors import BadRequest, ServiceUnavailable
 from app.core.time_utils import utcnow
 from app.integrations import x_oauth
+from app.models.waitlist_oauth_proof import WaitlistOAuthProof
 from app.models.waitlist_oauth_state import WaitlistOAuthState
+
+# how long a stored proof row stays consumable — matches the proof's own
+# itsdangerous max_age (crypto.verify_x_proof default 600s), so the poll
+# endpoint never hands out a token the register endpoint would reject
+PROOF_TTL_SECONDS = 600
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +65,14 @@ def _frontend_origin() -> str:
 
 async def start_waitlist_oauth(db, *, telegram_id: int) -> str:
     """Create a WaitlistOAuthState row + return the X authorize URL."""
-    if not x_oauth.is_configured():
+    # opportunistic housekeeping — cheap indexed DELETE of stale state/proof
+    # rows, so they can't accumulate unbounded (there's no cron wired up)
+    await purge_expired_states(db)
+    # Deliberately NOT x_oauth.is_configured(): that also requires the LEGACY
+    # x_oauth_callback_url, which the waitlist flow never uses. Only the
+    # client id matters here — _waitlist_redirect_uri() below already fails
+    # loudly when the waitlist callback URL is unset.
+    if not settings.x_oauth_client_id:
         raise ServiceUnavailable("X OAuth not configured")
     # Raises ServiceUnavailable if the waitlist callback URL is unset — see
     # _waitlist_redirect_uri docstring for why we don't fall back.
@@ -163,22 +176,71 @@ async def handle_waitlist_callback(
         "x_user_id": str(me["id"]),
         "iat": int(utcnow().timestamp()),
     })
+    # Server-side handoff for the Telegram WebView: openLink() completed this
+    # OAuth chain in the SYSTEM browser, whose sessionStorage the mini-app can
+    # never read. Upsert the proof keyed by telegram_id (DELETE-then-INSERT —
+    # a retried authorize simply replaces the previous proof) BEFORE the
+    # redirect, so the mini-app's poll of /waitlist/x-oauth/proof/ finds it.
+    await db.execute(
+        delete(WaitlistOAuthProof).where(
+            WaitlistOAuthProof.telegram_id == row.telegram_id
+        )
+    )
+    db.add(WaitlistOAuthProof(telegram_id=row.telegram_id, proof=proof))
+    await db.commit()
+
     logger.info(
         "[WAITLIST-OAUTH] proof issued for tg_id=%s x=@%s",
         row.telegram_id, me["username"],
     )
+    # Keep the redirect exactly as before — a plain (non-Telegram) browser
+    # still completes registration via the sessionStorage flow.
     return redirect_to_frontend(proof=proof)
 
 
+async def consume_proof(db, *, telegram_id: int) -> str | None:
+    """Atomically look up + delete the stored proof for a telegram_id.
+
+    Mirrors _consume_state: ``DELETE ... RETURNING`` so two concurrent polls
+    can't both receive the proof — exactly one caller sees the row. Returns
+    None when there's no row or the row is older than PROOF_TTL_SECONDS.
+    """
+    result = await db.execute(
+        delete(WaitlistOAuthProof)
+        .where(WaitlistOAuthProof.telegram_id == telegram_id)
+        .returning(
+            WaitlistOAuthProof.proof,
+            WaitlistOAuthProof.created_at,
+        )
+    )
+    row = result.first()
+    await db.commit()
+    if row is None:
+        return None
+    if row.created_at < utcnow() - timedelta(seconds=PROOF_TTL_SECONDS):
+        return None
+    return row.proof
+
+
 async def purge_expired_states(db) -> int:
-    """Housekeeping — drop stale rows. Not wired to a cron yet."""
+    """Housekeeping — drop stale state + proof rows.
+
+    Called opportunistically from start_waitlist_oauth (both DELETEs hit an
+    index) so neither table can accumulate unbounded.
+    """
     result = await db.execute(
         delete(WaitlistOAuthState).where(
             WaitlistOAuthState.expires_at < utcnow()
         )
     )
+    proof_result = await db.execute(
+        delete(WaitlistOAuthProof).where(
+            WaitlistOAuthProof.created_at
+            < utcnow() - timedelta(seconds=PROOF_TTL_SECONDS)
+        )
+    )
     await db.commit()
-    return result.rowcount or 0
+    return (result.rowcount or 0) + (proof_result.rowcount or 0)
 
 
 def verify_and_extract(

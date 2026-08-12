@@ -15,7 +15,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.clients.twitterapi import TwitterAPIClient
 from app.core.util import parse_twitter_dt as _parse_dt

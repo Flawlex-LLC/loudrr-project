@@ -75,6 +75,16 @@ async def register_entry(db, *, tg_user: dict, payload) -> RegisterResult:
     if not telegram_id:
         raise BadRequest("Missing Telegram ID")
 
+    users = UserRepository(db)
+    waitlist = WaitlistRepository(db)
+
+    # idempotency on telegram_id — same user submitting twice is success.
+    # Checked BEFORE proof verification so an already-registered user gets
+    # 'already_registered' even when their echoed proof has since expired.
+    existing = await waitlist.get(telegram_id=telegram_id)
+    if existing:
+        return RegisterResult(entry=existing, was_new=False)
+
     # X OAuth is now mandatory step 1 of the waitlist flow. The proof is a
     # signed itsdangerous token minted by the callback after the applicant
     # completes X OAuth — verify_and_extract re-checks signature, iat freshness,
@@ -83,20 +93,18 @@ async def register_entry(db, *, tg_user: dict, payload) -> RegisterResult:
         payload.x_proof, telegram_id=telegram_id,
     )
 
-    users = UserRepository(db)
-    waitlist = WaitlistRepository(db)
-
-    # idempotency on telegram_id — same user submitting twice is success
-    existing = await waitlist.get(telegram_id=telegram_id)
-    if existing:
-        return RegisterResult(entry=existing, was_new=False)
-
     xu = x_username.lower()
     # case-insensitive checks need a raw filter, not filter_by
     if await waitlist.exists_where(func.lower(WaitlistEntry.x_username) == xu):
         raise BadRequest("X username already registered")
     if await users.exists_where(func.lower(User.x_username) == xu):
         raise BadRequest("X username already in use")
+    # the immutable numeric X id survives handle renames — one X account backs
+    # at most one entry. The `if x_user_id` guard skips legacy rows with "".
+    if x_user_id and await waitlist.exists_where(
+        WaitlistEntry.x_user_id == x_user_id
+    ):
+        raise BadRequest("X account already registered")
 
     referrer_id, code_used = await _resolve_referrer(
         users, waitlist, payload.referral_code

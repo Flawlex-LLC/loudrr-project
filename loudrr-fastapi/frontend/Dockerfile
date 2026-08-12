@@ -6,9 +6,13 @@ FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies.
+# --include=dev: Coolify injects NODE_ENV=production as a build ARG/ENV, which
+# makes bare `npm ci` omit devDependencies — but the build needs typescript
+# (next.config.ts) and the other dev deps. Force-include them; the runner
+# stage copies only the standalone output so none of this ships to prod.
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm ci --include=dev
 
 # Rebuild the source code only when needed
 FROM base AS builder

@@ -114,14 +114,31 @@ export default function AdminWaitlistPage() {
                   </td>
                   <td className="px-4 py-3">
                     {e.x_username ? (
-                      <a
-                        href={`https://x.com/${e.x_username.replace(/^@/, '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-white hover:text-[#f95400] hover:underline"
-                      >
-                        @{e.x_username.replace(/^@/, '')}
-                      </a>
+                      <span className="inline-flex items-center gap-1.5">
+                        <a
+                          href={`https://x.com/${e.x_username.replace(/^@/, '')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-white hover:text-[#f95400] hover:underline"
+                        >
+                          @{e.x_username.replace(/^@/, '')}
+                        </a>
+                        {e.x_verified ? (
+                          <span
+                            title="Handle verified via X OAuth at registration"
+                            className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400"
+                          >
+                            oauth
+                          </span>
+                        ) : (
+                          <span
+                            title="Legacy entry — handle was pasted, not OAuth-verified"
+                            className="rounded-full bg-zinc-700/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400"
+                          >
+                            unverified
+                          </span>
+                        )}
+                      </span>
                     ) : (
                       <span className="text-zinc-600">—</span>
                     )}

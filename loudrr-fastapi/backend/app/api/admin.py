@@ -205,6 +205,9 @@ async def list_pending_waitlist(
             "telegram_id": e.telegram_id,
             "telegram_username": e.telegram_username,
             "x_username": e.x_username,
+            # True for OAuth-first registrations (handle came from X's own
+            # /users/me); False only for legacy paste-a-link entries.
+            "x_verified": e.x_verified,
             "region": e.region,
             "niche": e.niche,
             "created_at": e.created_at.isoformat() if e.created_at else None,

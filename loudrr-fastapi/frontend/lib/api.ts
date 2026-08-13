@@ -699,6 +699,9 @@ export interface PendingWaitlistEntry {
   telegram_id: number | null;
   telegram_username: string;
   x_username: string;
+  // True for OAuth-first registrations (handle verified against X's /users/me);
+  // false only for legacy paste-a-link entries.
+  x_verified: boolean;
   region: string;
   niche: string;
   created_at: string | null;

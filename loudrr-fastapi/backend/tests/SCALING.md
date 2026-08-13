@@ -77,3 +77,28 @@ paths (feed-heavy read mix + a slice of click/claim/submit), and run it against 
 staging deploy with PgBouncer + N workers. Watch: p95 latency, Postgres active
 connections, lock waits (`pg_stat_activity` wait events), and arq queue depth.
 That tells you the real ceiling and where to add capacity.
+
+## Load-test harness + first baseline (2026-08-13)
+
+`backend/locustfile.py` now exists (the Django reference file was deleted with
+the old repo — this one targets the FastAPI surface directly). Traffic mix:
+feed-heavy reads (/user/, /waitlist/status/, /settings/) + a write slice
+(/session/start/) + the new enrichment endpoint. Auth rides the ?telegram_id=
+debug bypass, so the target must run DEBUG=True — local dev or staging ONLY.
+
+Install (dev-only, deliberately NOT in requirements.txt):
+    ..\.venv\Scripts\python.exe -m pip install locust
+
+Smoke baseline — 100 users, spawn 10/s, 60s, single uvicorn worker,
+DEBUG=True (pretty structlog per request!), Windows laptop, local docker PG16:
+
+| metric | value |
+|---|---|
+| throughput | ~30 req/s sustained |
+| p50 / p95 / p99 (aggregate) | 860 ms / 3.2 s / 4.0 s |
+| errors | 3 / 1,793 (0.17%, transient conn resets) |
+
+Read as a FLOOR, not a ceiling: debug logging + one worker + laptop I/O
+dominate. Prod (Linux, DEBUG=False JSON logs, multiple workers, PgBouncer)
+should be run against staging per the procedure above before trusting 15k.
+The harness is the deliverable; the staging confirmation run is still open.

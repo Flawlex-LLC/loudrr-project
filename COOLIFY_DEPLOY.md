@@ -26,6 +26,13 @@ inter-container comms — no public port):
 | Postgres 16     | ms0q1gaxez5paxfnl5yjm08w   | `postgresql+asyncpg://loudrr:<password>@ms0q1gaxez5paxfnl5yjm08w:5432/loudrr` (password: see DATABASE_URL in Coolify env) |
 | Redis 7         | a25xzfeqa1z0zb619yvjxps4   | `redis://default:<password>@a25xzfeqa1z0zb619yvjxps4:6379/0` (password: see REDIS_URL in Coolify env) |
 
+> The old DB passwords were exposed in this file's git history. They are only
+> reachable from inside the box's docker network (no public ports), so exposure
+> is contained — but rotate them when convenient VIA THE COOLIFY UI (the
+> `/api/v1/databases` API 500s on standalone resources as of beta.473):
+> change the password on each DB resource, restart it, update DATABASE_URL /
+> REDIS_URL on loudrr-backend + loudrr-worker, then full re-Deploy of both.
+
 **Env vars seeded** (65 total via API):
 - Backend + worker: 29 each (DATABASE_URL / REDIS_URL / gateway keys / TG token / X OAuth / secrets / SITE_URL placeholder)
 - Frontend: 3 (BACKEND_ORIGIN → internal backend hostname, NEXT_PUBLIC_ADMIN_API_URL, NODE_ENV)

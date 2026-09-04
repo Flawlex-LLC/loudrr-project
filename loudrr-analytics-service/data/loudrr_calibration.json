@@ -1,0 +1,11 @@
+{
+  "_comment": "Locked Loudrr Score calibration params (98,303-voter re-score, 2026-06-28). A is anchored so Obama (raw 98717) -> Sorsa 3094 * 1.133 uplift = 3506. RE-ANCHOR A after any member re-score: A = Sorsa(anchor)*1.133 / raw(anchor).",
+  "A": 0.03553,
+  "FLOOR": 0.0,
+  "KLO": 666.0,
+  "KHI": 4000.0,
+  "S": 1000.0,
+  "CAP": 6000.0,
+  "uplift": 1.1333,
+  "anchor": {"handle": "BarackObama", "user_id": "813286", "raw": 98717, "sorsa": 3094.426}
+}

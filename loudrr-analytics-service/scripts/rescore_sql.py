@@ -13,7 +13,10 @@ reused if present, and PageRank continues from whatever pr_t holds (power iterat
 the same fixed point from any positive start).
 
 Math identical to rescore.py (alpha=0.85, dangling redistribution, 1000*pr/max)."""
-import asyncio, asyncpg, os, time
+import asyncio
+import asyncpg
+import os
+import time
 from dotenv import load_dotenv
 load_dotenv()
 PW = os.environ["LOUDRR_PG_PASSWORD"]

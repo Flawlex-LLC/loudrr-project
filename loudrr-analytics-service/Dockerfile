@@ -17,10 +17,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# One image, five modes (set RUN_MODE in Coolify):
-#   RUN_MODE=api          -> public scoring + mindshare + engagement API (uvicorn, port 8000)
-#   RUN_MODE=mindshare    -> hourly mindshare worker (ingest -> score -> aggregate -> movers)
-#   RUN_MODE=engagement   -> daily smart-engagement worker (smart-set timelines -> edges)
-#   RUN_MODE=twitterscore -> one-shot: scrape TwitterScore categories for all handles, then exit
-#   default/crawl         -> crawl the smart-set following graph to completion, then exit 0
-CMD ["sh", "-c", "if [ \"$RUN_MODE\" = \"api\" ]; then exec uvicorn app.main:app --host 0.0.0.0 --port 8000; elif [ \"$RUN_MODE\" = \"mindshare\" ]; then exec python -m app.mindshare.worker; elif [ \"$RUN_MODE\" = \"engagement\" ]; then exec python -m app.engagement.worker; elif [ \"$RUN_MODE\" = \"twitterscore\" ]; then exec python -m scripts.scrape_twitterscore_prod; else exec python -m scripts.run_until_done; fi"]
+# One image, two modes (set RUN_MODE in Coolify):
+#   RUN_MODE=api  -> the scoring API (uvicorn, port 8000)
+#   default       -> crawl the smart-set following graph to completion, then exit 0
+# NOTE: the api mode listens on 8000 (not 8001) — keep ports_exposes + every
+# consumer's LOUDRR_ANALYTICS_URL in step with that.
+CMD ["sh", "-c", "if [ \"$RUN_MODE\" = \"api\" ]; then exec uvicorn app.main:app --host 0.0.0.0 --port 8000; else exec python -m scripts.run_until_done; fi"]

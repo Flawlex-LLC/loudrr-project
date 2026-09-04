@@ -263,13 +263,6 @@ async def get_score(
     result["score"] = loudrr_score(result.get("raw", 0.0))
     result["userName"] = username or user_name
     result["userId"] = uid
-
-    # secondary: parity estimate vs harvested TweetScout/Sorsa, if a fit exists (lazy import)
-    from app.services.calibration import apply_calibration
-
-    parity = apply_calibration(result.get("raw", 0.0))
-    if parity is not None:
-        result["parity_score"] = round(parity, 2)
     return result
 
 

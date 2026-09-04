@@ -124,7 +124,12 @@ async def test_profile_scores_any_resolvable_account(client, monkeypatch):
     await _seed(S, [
         _acct(1, "10", "hero", score=4000),
         _acct(2, "20", "mid", score=2000),
-        SmartSetMember(user_id="20", username="mid", score=180.0),
+        # NOTE: the summed member weight must land inside the calibration's
+        # domain (data/loudrr_calibration_knots.json is fit over ln(raw) for
+        # raw ~653..189k). A toy value like 180 extrapolates below the first
+        # knot and legitimately clamps to the 0 floor, which used to make this
+        # test pass only on boxes where data/ was missing.
+        SmartSetMember(user_id="20", username="mid", score=5000.0),
         Edge(follower_id="20", followee_id="999"),   # @mid follows @degentrader
     ])
     r = await c.get("/v1/profile", params={"userName": "DegenTrader"})

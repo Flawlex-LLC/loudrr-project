@@ -29,7 +29,7 @@ async def main() -> None:
         total = (await s.execute(select(func.count()).select_from(SmartSetMember))).scalar()
     spent = bal.get("total_spent") or 0
     calls = bal.get("total_calls") or 0
-    print(f"provider          loudrr-gateway")
+    print("provider          loudrr-gateway")
     print(f"wallet balance    {bal.get('recharge_credits'):,} credits")
     print(f"cumulative spend  {spent:,} credits over {calls:,} calls")
     print(f"DB progress       {crawled:,}/{total:,} members crawled, {edges:,} edges")

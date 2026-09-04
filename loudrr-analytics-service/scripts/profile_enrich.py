@@ -1,6 +1,9 @@
 """Profile-enrich: fetch followers/following/bio for voters + top discovered, flag dead/bots/crypto.
 Pure Twitter-API (twitterapi.io) -> local CSV. Touches NO database, safe to run alongside the backup."""
-import asyncio, csv, os, re
+import asyncio
+import csv
+import os
+import re
 import httpx
 from dotenv import load_dotenv
 load_dotenv()

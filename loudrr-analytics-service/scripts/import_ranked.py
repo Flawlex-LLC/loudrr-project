@@ -8,7 +8,6 @@ Sources (all REAL crawl/vendor outputs, no synthetic data):
   * data/exports/elite_voters.csv     — the VOTER universe (vitalik, cz, cobie...):
     loudrr_influence (0-1000) + elite_followers; user_id resolved via profiles_enriched
   * data/exports/profiles_enriched.csv — name, bio, verified, follower counts
-  * twitterscore_accounts (DB)         — categories (vendor-corroborated), joined by user_id
 
 Scores: discovered = locked Loudrr calibration of raw; voters = influence x 6 (same
 0-6000 display scale; REAL computed influence, replaced by exact score_for at the prod
@@ -21,10 +20,10 @@ import csv
 import logging
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 
 from app.core.loudrr_score import loudrr_score
-from app.db.models import RankedAccount, TwitterScoreAccount
+from app.db.models import RankedAccount
 from app.db.session import Base, SessionLocal, engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -106,18 +105,16 @@ async def run() -> dict:
     for i, a in enumerate(rows, start=1):
         a.rank = i
 
+    # NOTE: `categories` used to be backfilled here from the TwitterScore vendor
+    # scrape, which was removed with the rest of the non-scoring subsystems. Rows
+    # import without categories now; the column stays so the values already in
+    # ranked_accounts keep serving read-only.
     async with SessionLocal() as s:
-        cats = {uid: c for uid, c in (await s.execute(
-            select(TwitterScoreAccount.user_id, TwitterScoreAccount.categories)
-            .where(TwitterScoreAccount.categories.is_not(None)))).all()}
-        for row in rows:
-            row.categories = cats.get(row.user_id)
-
         await s.execute(delete(RankedAccount))  # full refresh — the import IS the source
         s.add_all(rows)
         await s.commit()
 
-    return {"imported": len(rows), "with_categories": sum(1 for r in rows if r.categories)}
+    return {"imported": len(rows)}
 
 
 if __name__ == "__main__":

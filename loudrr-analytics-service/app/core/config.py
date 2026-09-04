@@ -16,10 +16,6 @@ class Settings(BaseSettings):
     )
 
     # --- API keys ---
-    # TweetScout == Sorsa (same API). Accept either env name; TWEETSCOUT_API_KEY wins.
-    sorsa_key: str = Field(
-        default="", validation_alias=AliasChoices("TWEETSCOUT_API_KEY", "SORSA_KEY")
-    )
     twitterapi_io_key: str = ""
     # loudrr gateway — our own drop-in twitterapi.io-compatible API (verified 2026-06-18:
     # identical paths, params, response shapes, and x-api-key auth; own credit economics).
@@ -54,10 +50,6 @@ class Settings(BaseSettings):
         if v.startswith("postgresql://"):  # has scheme but no +driver
             return "postgresql+asyncpg://" + v[len("postgresql://"):]
         return v
-
-    # --- Sorsa/TweetScout harvest knobs (ONE-TIME 10k budget; be conservative) ---
-    sorsa_qps: int = 5                 # pace well under their ~20/s to avoid 429s
-    sorsa_request_ceiling: int = 9960  # hard stop below the 10k cap (irreversible)
 
     # --- Crawl knobs (drive cost) ---
     # Profiles-only path: /user/followings returns full profiles, max 200/page.
@@ -105,87 +97,6 @@ class Settings(BaseSettings):
     # TwitterScore, so a 40000 cut slightly sharpens agreement while defining a cleaner "smart
     # followers" universe. Off by default; set SMART_SET_CUTOFF=40000 to activate.
     smart_set_cutoff: int | None = None
-
-    # Engagement ingest source: "advanced_search" (from:<user> include:nativeretweets — 0% foreign
-    # overhead, cheaper) or "timeline" (/user/last_tweets by numeric id, includeReplies — ~1.75x
-    # cost from thread-context padding, immune to handle renames). Both capture the same edges now
-    # that the gateway fixed last_tweets (2026-07-23); default to the cheaper path.
-    engagement_source: str = "advanced_search"
-
-    # --- Kaito mindshare scrape (docs/kaito_reverse_engineering.md) ---
-    # hub.kaito.ai data API. KEY FINDING: the /voices/* JSON API is NOT Cloudflare-challenged
-    # (only the HTML pages are) — so the fast default path is plain curl_cffi + rotating proxies,
-    # no browser needed. Datacenter (Webshare) proxies are fine here precisely because there's no
-    # CF challenge to fail. Camoufox stays as a fallback if they ever gate the API host.
-    kaito_api_base: str = "https://hub.kaito.ai/api/v1"
-    # Rotating proxy list (Webshare "h:p:u:pw" lines or http://… lines). Blank = home IP.
-    kaito_proxy_file: str = "data/proxies/webshare.txt"
-    # Inline proxies for prod (data/ is gitignored, so the file isn't in the container). Set
-    # KAITO_PROXIES in Coolify — newline/comma/semicolon-separated "host:port:user:pass" lines.
-    kaito_proxies: str = ""
-    kaito_concurrency: int = 8          # parallel API calls (burst-tested safe at ~20)
-    kaito_impersonate: str = "chrome124"  # curl_cffi TLS/JA3 impersonation profile
-    kaito_max_retries: int = 4          # retry 429/5xx/network on a fresh proxy
-    kaito_request_pause_ms: int = 0     # extra politeness spacing (0 = rely on concurrency cap)
-    # --- Camoufox fallback (only if the API host ever gets CF-gated) ---
-    kaito_proxy: str = ""               # single browser proxy "http://user:pass@host:port"
-    kaito_headless: bool = False        # CF managed challenge needs a real render context
-    kaito_window_w: int = 1200
-    kaito_window_h: int = 800
-
-    # --- Smart-engagement tracker (app/engagement/, RUN_MODE=engagement) ---
-    # Dedicated system: own pacing + own budget so it can NEVER starve the follower crawl.
-    # "seeds" (~3.9k curated) | "top:N" (seeds ∪ top-N by PageRank; prod target top:20000) | "all"
-    engagement_universe: str = "seeds"
-
-    @field_validator("engagement_universe")
-    @classmethod
-    def _validate_universe(cls, v: str) -> str:
-        """Fail at BOOT on a malformed value (e.g. 'top:20k'). Validating deep in the data
-        path instead would make the worker log-and-sleep forever while looking healthy."""
-        u = (v or "seeds").strip().lower()
-        if u in ("seeds", "all"):
-            return u
-        if u.startswith("top:"):
-            n = int(u.split(":", 1)[1])  # raises loudly on 'top:20k'
-            if n <= 0:
-                raise ValueError(f"ENGAGEMENT_UNIVERSE top:N needs N > 0, got {n}")
-            return u
-        raise ValueError(f"ENGAGEMENT_UNIVERSE must be seeds | top:N | all, got {v!r}")
-    engagement_max_pages: int = 3            # ~60 tweets/member/pull (first pull reaches deeper)
-    engagement_concurrency: int = 4
-    # Its own gateway pacing, BELOW the crawl's 30/min band so both can coexist in the
-    # gateway team's ~20-40 req/min guidance.
-    engagement_rate_calls: int = 15
-    engagement_rate_window_s: int = 60
-    engagement_daily_budget_usd: float = 10.0
-
-    # --- Realtime KOL calls (POST /v1/hooks/x, app/engagement/hooks.py) ---
-    # Shared secret the gateway must present on every webhook push. This is the ONLY
-    # write endpoint we expose to the public internet: unauthenticated, anyone could inject
-    # fabricated "KOL called $X" rows straight into the product. So it FAILS CLOSED — blank
-    # secret => the hook 503s and pushes are ignored (set LIVE_WEBHOOK_SECRET to enable).
-    live_webhook_secret: str = ""
-
-    # --- Realtime KOL wallet watcher (app/engagement/live_wallets.py) ---
-    # Inverts the old pool-sampling capture (which watched tokens and hoped a KOL was in the
-    # trades — hence eng_ride stayed 0): subscribes to each vault wallet directly via the
-    # FREE keyless Solana RPC websocket (logsSubscribe), so EVERY KOL buy is caught regardless
-    # of which token it is. Verified 2026-07-16: mainnet-beta accepts 62 subs on one socket,
-    # keyless. OFF by default — it opens outbound sockets and does real RPC work.
-    wallet_watch_enabled: bool = False
-    solana_rpc_url: str = "https://api.mainnet-beta.solana.com"
-    solana_ws_url: str = "wss://api.mainnet-beta.solana.com"
-    # Cap the watched set (highest Loudrr score first) so getTransaction load stays bounded on
-    # the free RPC; 0 = every identity-mapped Solana vault wallet.
-    wallet_watch_max: int = 200
-    # Subscriptions per socket. The probe took 62 fine; 40 leaves headroom and spreads the
-    # notification load across a few connections instead of one hot socket.
-    wallet_watch_subs_per_conn: int = 40
-    # getTransaction fetchers pulling from the signature queue (dedup'd). The free RPC is
-    # rate-limited, so this is small and paced.
-    wallet_watch_fetchers: int = 4
-    wallet_watch_rpc_per_min: int = 100
 
     # --- Service ---
     app_env: str = "dev"

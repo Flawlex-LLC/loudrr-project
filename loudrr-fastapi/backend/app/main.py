@@ -187,9 +187,20 @@ async def readyz(db=Depends(get_session)):
 # post-cost range). Matches the Django contract path /api/miniapp/settings/.
 @app.get("/settings/")
 async def miniapp_settings(db=Depends(get_session)):
+    # `tiers` mirrors the LIVE tier table (services/tier.TIERS), which admins
+    # can retune at runtime via the TIER_*_THRESHOLD site settings. It is
+    # published here so surfaces that can't import the backend — notably the
+    # edge-runtime OG card route — can label a score with the CURRENT bands
+    # instead of a hardcoded copy that silently drifts after a retune.
+    # Highest threshold first; multipliers are deliberately not exposed.
+    from app.services.tier import TIERS
+
     return {
         "post_cost_min": await get_setting(db, "POST_COST_MIN"),
         "post_cost_max": await get_setting(db, "POST_COST_MAX"),
+        "tiers": [
+            {"name": name, "min_score": min_score} for name, min_score, _ in TIERS
+        ],
     }
 
 

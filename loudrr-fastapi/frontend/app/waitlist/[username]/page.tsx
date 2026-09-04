@@ -7,11 +7,37 @@ const BOT_USERNAME = 'loudrr_bot'
 // generateMetadata (server-side) so the key never reaches the browser.
 const ANALYTICS_URL = process.env.LOUDRR_ANALYTICS_URL || ''
 const ANALYTICS_KEY = process.env.LOUDRR_ANALYTICS_KEY || ''
+// Server-only: used to read the LIVE tier bands so the card's label follows
+// admin retunes instead of the card route's hardcoded fallback table.
+const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || ''
 
 type Enrichment = {
   score?: number
+  tier?: string
   followers: string[]
   followersCount?: number
+}
+
+/**
+ * Resolve a score to the CURRENT tier name using the bands the backend
+ * publishes on /settings/ (admins can retune TIER_*_THRESHOLD at runtime).
+ * Returns undefined on any failure — the card route then falls back to its
+ * own hardcoded table, which matches the shipped defaults.
+ */
+async function resolveTier(score: number): Promise<string | undefined> {
+  if (!BACKEND_ORIGIN) return undefined
+  try {
+    const res = await fetch(`${BACKEND_ORIGIN.replace(/\/$/, '')}/settings/`, {
+      next: { revalidate: 300 },
+    })
+    if (!res.ok) return undefined
+    const d = (await res.json()) as { tiers?: { name: string; min_score: number }[] }
+    // Published highest-threshold-first; first match wins.
+    const hit = (d.tiers || []).find((t) => score >= t.min_score)
+    return hit?.name
+  } catch {
+    return undefined
+  }
 }
 
 // Best-effort enrichment. Any failure returns the empty shape — the card
@@ -47,12 +73,15 @@ async function loadEnrichment(username: string): Promise<Enrichment> {
       .slice(0, 10)
   }
 
-  return { score, followers, followersCount: followers.length || undefined }
+  const tier = typeof score === 'number' ? await resolveTier(score) : undefined
+
+  return { score, tier, followers, followersCount: followers.length || undefined }
 }
 
 function buildCardUrl(base: string, username: string, e: Enrichment): string {
   const p = new URLSearchParams({ username })
   if (typeof e.score === 'number') p.set('score', String(Math.round(e.score)))
+  if (e.tier) p.set('tier', e.tier)
   if (e.followers.length) p.set('followers', e.followers.join(','))
   if (typeof e.followersCount === 'number') p.set('followersCount', String(e.followersCount))
   return `${base}/api/cards/waitlist?${p.toString()}`

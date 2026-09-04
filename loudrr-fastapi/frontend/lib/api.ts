@@ -251,6 +251,10 @@ export interface SubmitPostResponse {
 export interface AppSettings {
   post_cost_min: number;
   post_cost_max: number;
+  // Live tier bands (highest threshold first) — admins can retune these at
+  // runtime, so surfaces that label a score should read them from here rather
+  // than hardcoding a copy. See app/waitlist/[username]/page.tsx.
+  tiers?: { name: string; min_score: number }[];
 }
 
 export interface QueueClaimResponse {

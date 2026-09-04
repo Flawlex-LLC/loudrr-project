@@ -7,7 +7,13 @@ export const runtime = 'edge'
 const SPACE_GROTESK_BOLD_URL = 'https://fonts.gstatic.com/s/spacegrotesk/v22/V8mQoQDjQSkFtoMM3T6r8E7mF71Q-gOoraIAEj4PVksj.ttf'
 const SYNE_BOLD_URL = 'https://fonts.gstatic.com/s/syne/v24/8vIS7w4qzmVxsWxjBZRjr0FKM_3fvj6k.ttf'
 
-// Loudrr Score tiers — mirrors backend/app/services/tier.py thresholds.
+// FALLBACK tier table — mirrors the SHIPPED DEFAULTS of backend
+// app/services/tier.py. Admins can retune those thresholds at runtime
+// (TIER_*_THRESHOLD site settings), and this edge route can't import the
+// backend, so callers should pass an explicit `?tier=` resolved from the
+// live bands (the share page reads them off /settings/; the miniapp gets
+// them from the enrichment endpoint). This table only labels a score when
+// no tier was supplied.
 // Score scale is 0-6000 but all tier bands live in 0..1000; anything above is GOAT.
 function tierFor(score: number): string {
   if (score >= 1000) return 'GOAT'

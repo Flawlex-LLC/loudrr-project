@@ -183,7 +183,21 @@ export function getMockResponse(endpoint: string): unknown | undefined {
 
   switch (path) {
     case '/settings/':
-      return { post_cost_min: 60, post_cost_max: 120 };
+      return {
+        post_cost_min: 60,
+        post_cost_max: 120,
+        // Shipped-default tier bands, highest threshold first (mirrors the
+        // real /settings/ payload so design mode matches production shape).
+        tiers: [
+          { name: 'GOAT', min_score: 1000 },
+          { name: 'OG', min_score: 800 },
+          { name: 'Legend', min_score: 600 },
+          { name: 'Based', min_score: 400 },
+          { name: 'Degen', min_score: 200 },
+          { name: 'Normie', min_score: 100 },
+          { name: 'Anon', min_score: 0 },
+        ],
+      };
 
     case '/user/':
       // In pre-account states the user does not exist yet — make /user/ fail

@@ -87,6 +87,17 @@ class Settings(BaseSettings):
     crawl_rate_calls: int = 30
     crawl_rate_window_s: int = 60
     crawl_daily_budget_usd: float = 50.0
+    # How old a member's follow-graph may get before it is re-crawled, in days.
+    # A member is eligible when last_crawled_at IS NULL (never crawled) or older
+    # than this. 30 = refresh each account about once a month.
+    #
+    # COST: a full pass re-reads every member's following list. At ~294M edges
+    # and $4.50/M on the bulk-IDs endpoint that is ~$1,300 per pass, paced by
+    # crawl_daily_budget_usd (at $50/day a full pass takes ~26 days).
+    #
+    # Set to 0 to disable refreshing entirely — only never-crawled members are
+    # picked up, which is how the crawl behaved before this setting existed.
+    crawl_refresh_days: int = 30
 
     # --- Scoring knobs ---
     pagerank_alpha: float = 0.85

@@ -1,7 +1,12 @@
 """Crawl entrypoint for the server (Coolify): run the following-graph crawl in repeated
 passes until EVERY smart-set member is captured, then exit 0. Resumable and idempotent —
-each pass only picks up members still missing (last_crawled_at IS NULL), so a restart just
-continues. Deferred members (API down for them this pass) are retried on the next pass.
+each pass only picks up members still DUE — never crawled, or last crawled longer ago than
+CRAWL_REFRESH_DAYS (default 30) — so a restart just continues. Deferred members (API down
+for them this pass) are retried on the next pass.
+
+The staleness cutoff is snapshotted ONCE at the start of the run and reused for every pass.
+That bounds the run: it refreshes everything that was stale when it began and then exits,
+instead of chasing members that age back into eligibility while a long pass is still going.
 
 Stops early and cleanly on budget/quota exhaustion, or if a pass makes zero progress twice
 in a row (the few remaining members are permanently unreachable) so it can't loop forever.
@@ -16,7 +21,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, select, text, update
 
-from app.services.crawl import crawl
+from app.services.crawl import count_due, crawl, stale_before
 from app.db.session import SessionLocal, engine, Base
 from app.db.models import SmartSetMember
 
@@ -68,11 +73,9 @@ async def _ensure_seed() -> None:
         log.info("seeded smart_set with %d members from %s", len(members), SEED_FILE)
 
 
-async def _remaining() -> int:
-    async with SessionLocal() as s:
-        return (await s.execute(
-            select(func.count()).select_from(SmartSetMember)
-            .where(SmartSetMember.last_crawled_at.is_(None)))).scalar() or 0
+async def _remaining(cutoff) -> int:
+    """Members still due against this run's snapshotted cutoff."""
+    return await count_due(cutoff)
 
 
 def _merge(agg: dict, s: dict) -> None:
@@ -119,16 +122,19 @@ async def main() -> None:
     no_progress = 0
     pass_no = 0
     stopped = "complete"
+    # snapshot once — see module docstring for why this must not be recomputed per pass
+    cutoff = stale_before()
+    log.info("staleness cutoff: %s", cutoff.isoformat() if cutoff else "disabled (never-crawled only)")
     while True:
-        rem = await _remaining()
+        rem = await _remaining(cutoff)
         if rem == 0:
             log.info("ALL MEMBERS CRAWLED — done.")
             break
         pass_no += 1
-        log.info("=== crawl pass %d: %d members remaining ===", pass_no, rem)
-        summary = await crawl(budget_usd=PASS_BUDGET_USD)
+        log.info("=== crawl pass %d: %d members due ===", pass_no, rem)
+        summary = await crawl(budget_usd=PASS_BUDGET_USD, cutoff=cutoff)
         _merge(agg, summary)
-        after = await _remaining()
+        after = await _remaining(cutoff)
         log.info("pass %d done: %d -> %d remaining (%s)", pass_no, rem, after, summary.get("stopped"))
 
         if summary.get("stopped") in ("budget", "quota", "balance_stale"):
@@ -146,7 +152,7 @@ async def main() -> None:
 
     # ---- performance report (for the gateway team) ----
     dur = time.monotonic() - t0
-    deferred = await _remaining()
+    deferred = await _remaining(cutoff)
     crawled = agg.get("members_crawled", 0)
     rep = {
         "started_at": started.isoformat(timespec="seconds"),

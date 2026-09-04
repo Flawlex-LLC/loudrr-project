@@ -9,9 +9,15 @@ Profiles-only: the verified endpoint catalog exposes just ``/user/followings``
 app/clients/twitterapi.py). Each followee profile already carries the ``id``, so an
 edge is (m.user_id -> profile.id) with no extra resolution.
 
+Refresh cadence. A member is due when it has never been crawled OR its
+``last_crawled_at`` is older than ``settings.crawl_refresh_days`` (default 30 —
+about monthly). Selection is stalest-first, so a budget-capped run always spends
+on the most out-of-date members. Set the setting to 0 to freeze the graph and
+only pick up never-crawled members.
+
 Resume model — **DB-authoritative** (not a side file). A member is "done" iff its
-``last_crawled_at`` is non-NULL, which is committed *after* its edges are flushed.
-``_select_members`` only returns members with NULL ``last_crawled_at``, so:
+``last_crawled_at`` is newer than the run's staleness cutoff, committed *after*
+its edges are flushed. ``_select_members`` only returns members still due, so:
   * completed members never consume a ``--limit`` slot (no starvation),
   * a member that fails transiently stays NULL and is retried on the next run,
   * a crash mid-member re-crawls exactly that one member next run (edges are
@@ -35,10 +41,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import httpx
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import OperationalError
 
 from app.clients.twitterapi import TwitterAPIClient
@@ -195,29 +202,73 @@ async def _flush_failures(records: list[dict]) -> None:
         logger.warning("failure-log flush failed (%s)", e)
 
 
-async def _select_members(
-    limit: int | None, *, random_order: bool = False
-) -> list[tuple[str, str | None]]:
-    """Members still to crawl (last_crawled_at IS NULL).
+def stale_before() -> datetime | None:
+    """The cutoff a member's ``last_crawled_at`` must beat to count as fresh.
 
-    Filtering on NULL makes resume DB-authoritative: completed members are excluded
-    at the SQL level so they never consume a --limit slot, and failed members (still
-    NULL) are legitimately retried on the next run.
+    ``None`` when refreshing is disabled (``crawl_refresh_days <= 0``), in which
+    case only never-crawled members are eligible.
+
+    Callers that loop (scripts/run_until_done.py) should snapshot this ONCE at
+    the start of a run and pass it in. Recomputing it per pass would make a run
+    that outlives the refresh window chase its own tail: members crawled at the
+    start of the pass would age back into eligibility before the pass ended, and
+    the loop would never reach zero.
+    """
+    days = settings.crawl_refresh_days
+    if days <= 0:
+        return None
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
+def _due_filter(cutoff: datetime | None):
+    """SQL predicate for 'this member needs crawling'."""
+    never = SmartSetMember.last_crawled_at.is_(None)
+    if cutoff is None:
+        return never
+    return or_(never, SmartSetMember.last_crawled_at < cutoff)
+
+
+async def _select_members(
+    limit: int | None,
+    *,
+    random_order: bool = False,
+    cutoff: datetime | None = None,
+) -> list[tuple[str, str | None]]:
+    """Members due a crawl: never crawled, or last crawled before ``cutoff``.
+
+    Filtering in SQL makes resume DB-authoritative: members crawled during this
+    run are excluded automatically so they never consume a --limit slot, and
+    failed members (still NULL) are legitimately retried on the next pass.
+
+    Order is STALEST FIRST — never-crawled members lead, then oldest crawl — so
+    a budget-capped run always spends on the most out-of-date data.
 
     ``random_order`` draws a representative random sample (for an unbiased cost
-    measurement) instead of the default insertion order.
+    measurement) instead.
     """
     async with SessionLocal() as session:
         q = (
             select(SmartSetMember.user_id, SmartSetMember.username)
-            .where(SmartSetMember.last_crawled_at.is_(None))
+            .where(_due_filter(cutoff))
         )
         q = q.order_by(func.random()) if random_order else q.order_by(
-            SmartSetMember.added_at.asc(), SmartSetMember.user_id.asc()
+            SmartSetMember.last_crawled_at.asc().nulls_first(),
+            SmartSetMember.added_at.asc(),
+            SmartSetMember.user_id.asc(),
         )
         if limit:
             q = q.limit(limit)
         return list((await session.execute(q)).all())
+
+
+async def count_due(cutoff: datetime | None) -> int:
+    """How many members are due a crawl against ``cutoff`` (drives the run loop)."""
+    async with SessionLocal() as session:
+        return (
+            await session.execute(
+                select(func.count()).select_from(SmartSetMember).where(_due_filter(cutoff))
+            )
+        ).scalar() or 0
 
 
 async def _true_credits(tw: TwitterAPIClient) -> int | None:
@@ -307,6 +358,7 @@ async def crawl(
     budget_usd: float | None = None,
     random_order: bool = False,
     concurrency: int | None = None,
+    cutoff: datetime | None = ...,
 ) -> dict:
     """Crawl following lists for smart-set members CONCURRENTLY. Returns a run summary.
 
@@ -334,7 +386,11 @@ async def crawl(
     )
 
     await _ensure_failures_table()
-    members = await _select_members(limit, random_order=random_order)
+    # `...` = "decide from settings"; an explicit None disables refreshing for
+    # this call. run_until_done snapshots the cutoff once and passes it in.
+    if cutoff is ...:
+        cutoff = stale_before()
+    members = await _select_members(limit, random_order=random_order, cutoff=cutoff)
     queue: asyncio.Queue = asyncio.Queue()
     for m in members:
         queue.put_nowait(m)

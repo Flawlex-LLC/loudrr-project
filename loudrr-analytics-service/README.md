@@ -80,7 +80,14 @@ One image, two modes (`RUN_MODE` in Coolify):
 | RUN_MODE | Does |
 |---|---|
 | `api` | serves the scoring API on **port 8000** |
-| *(unset)* | runs `scripts.run_until_done` — crawls the graph to completion, exits 0 |
+| *(unset)* | runs `scripts.run_until_done` — crawls every member that is DUE, then exits 0 |
+
+A member is due when it has never been crawled, or was last crawled longer ago
+than `CRAWL_REFRESH_DAYS` (default **30** — about monthly). Selection is
+stalest-first, so a budget-capped run always spends on the most out-of-date data.
+Set it to `0` to freeze the graph. A full refresh pass re-reads every following
+list — ~294M edges at $4.50/M is roughly **$1,300**, paced by
+`CRAWL_DAILY_BUDGET_USD` (at $50/day a pass takes ~26 days).
 
 `Dockerfile.repair` is a one-shot crawl-repair image (`scripts.repair_crawl2`).
 See [docs/deploy_scoring_api.md](docs/deploy_scoring_api.md).

@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { hapticFeedback, openLink } from '@/lib/telegram';
 import { api, Post, SessionResponse, User, AppSettings } from '@/lib/api';
 import { EngageData, STALE_THRESHOLD_MS, ICON_GRADIENT_STYLE, formatKarma } from '../shared';
-import { BoltIconFill, PlusIconFill, CheckIconFill, HeartIconFill, XIconFill, ExternalLinkIconFill, InfoIconFill, XLogoIcon, ClockIconFill, SendIconFill } from '../icons';
+import { BoltIconFill, PlusIconFill, CheckIconFill, XIconFill, ExternalLinkIconFill, InfoIconFill, XLogoIcon, ClockIconFill, SendIconFill } from '../icons';
 import { PixelLoader } from '../components/leaf';
 import { SubmitModal } from '../modals/submit';
 
@@ -37,9 +37,11 @@ export function EngageTab({
   };
 
   // Local state (not persisted across tab switches)
-  const [clickedPost, setClickedPost] = useState<string | null>(null);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
-  const [likeIntentEnabled, setLikeIntentEnabled] = useState(true); // Default ON
+  const [replyIntentEnabled, setReplyIntentEnabled] = useState(true); // Default ON
+  // Claim threshold is admin-tunable (MIN_ENGAGEMENTS_TO_CLAIM); the backend
+  // enforces it, we only mirror it. 10 is the shipped default.
+  const minToClaim = settings?.min_engagements_to_claim ?? 10;
   const [refreshing, setRefreshing] = useState(false);
   const [showClaimTooltip, setShowClaimTooltip] = useState(false);
   const [showFailurePopup, setShowFailurePopup] = useState(false);
@@ -49,7 +51,6 @@ export function EngageTab({
 
   // Refs
   const carouselRef = useRef<HTMLDivElement>(null);
-  const clickedPostRef = useRef<string | null>(null);
   const sessionRef = useRef<SessionResponse | null>(null);
   const engagedPostsRef = useRef<Set<string>>(new Set());
   const currentPostIndexRef = useRef(0);
@@ -60,8 +61,10 @@ export function EngageTab({
   const isStale = lastFetchedAt && (Date.now() - lastFetchedAt > STALE_THRESHOLD_MS);
   const showMandatoryRefresh = state === 'ready' && isStale && !refreshing;
 
-  // Helper to extract tweet ID and construct like intent URL
-  const getLikeIntentUrl = (post: Post): string => {
+  // Open X straight into the reply composer for this post. Verification only
+  // checks for a REPLY (X made likes private), so the old like-intent default
+  // sent people to like, come back, and then fail the claim.
+  const getReplyIntentUrl = (post: Post): string => {
     // Use tweet_id if available, otherwise extract from URL
     let tweetId = post.tweet_id;
     if (!tweetId) {
@@ -70,15 +73,15 @@ export function EngageTab({
       tweetId = match?.[1] || '';
     }
     if (tweetId) {
-      return `https://twitter.com/intent/like?tweet_id=${tweetId}`;
+      return `https://x.com/intent/post?in_reply_to=${tweetId}`;
     }
     // Fallback to original URL if can't extract tweet ID
     return post.x_link;
   };
 
-  // Get the appropriate URL based on like intent toggle
+  // Get the appropriate URL based on the reply-composer toggle
   const getEngageUrl = (post: Post): string => {
-    return likeIntentEnabled ? getLikeIntentUrl(post) : post.x_link;
+    return replyIntentEnabled ? getReplyIntentUrl(post) : post.x_link;
   };
 
   // Keep refs in sync with state
@@ -97,91 +100,7 @@ export function EngageTab({
   // NOTE: Removed auto-scroll useEffect - all scrolling is now handled explicitly:
   // - handleEngageClick: scrolls to next card on click
   // - startSession: scrolls to first unengaged card on load
-  // - handleReturn: scrolls to next card when returning from X
   // This avoids race conditions between multiple scroll triggers.
-
-  // Auto-detect return from X and advance to first unengaged card
-  useEffect(() => {
-    if (state !== 'engaging') return;
-
-    const handleReturn = () => {
-      // User returned from X - use ref to get current clickedPost value
-      const postId = clickedPostRef.current;
-      if (!postId) return;
-
-      // Tell the backend the user returned from X for this post.
-      // Fire-and-forget — purely a signal, never blocks the UI.
-      api.verifyReturn(postId).catch(() => { /* non-critical */ });
-
-      // Mark post as engaged (DB already confirmed in handleEngageClick)
-      const newEngaged = new Set(engagedPostsRef.current).add(postId);
-      engagedPostsRef.current = newEngaged;
-
-      // Clear clicked state
-      clickedPostRef.current = null;
-      setClickedPost(null);
-
-      // Find first unengaged post
-      const posts = sessionRef.current?.posts || [];
-      let nextIndex = posts.length; // Default to claim card
-      for (let i = 0; i < posts.length; i++) {
-        if (!newEngaged.has(posts[i].id)) {
-          nextIndex = i;
-          break;
-        }
-      }
-
-      // Update state using lifted state setter
-      currentPostIndexRef.current = nextIndex;
-      setEngageData(prev => ({
-        ...prev,
-        state: 'ready',
-        engagedPosts: newEngaged,
-        currentPostIndex: nextIndex,
-      }));
-
-      // FORCE SCROLL after DOM updates (fixes race condition)
-      // Disable onScroll handler to prevent it from snapping back
-      isScrollingRef.current = true;
-      setTimeout(() => {
-        if (carouselRef.current) {
-          const container = carouselRef.current;
-          const cardWidth = container.offsetWidth * 0.8;
-          const spacer = container.offsetWidth * 0.1;
-          const targetScroll = spacer + (nextIndex * (cardWidth + 12)) - (container.offsetWidth - cardWidth) / 2;
-          container.scrollTo({ left: Math.max(0, targetScroll), behavior: 'smooth' });
-        }
-        hapticFeedback('success');
-        // Re-enable onScroll after scroll animation completes
-        setTimeout(() => {
-          isScrollingRef.current = false;
-        }, 400);
-      }, 50);
-    };
-
-    const handleVisibilityChange = () => {
-      // Only run when Engage tab is active to prevent scroll reset during tab switches
-      if (document.visibilityState === 'visible' && activeTab === 'engage') {
-        handleReturn();
-      }
-    };
-
-    // Also listen for focus - handles desktop browser tab switching
-    const handleFocus = () => {
-      // Only run when Engage tab is active
-      if (activeTab === 'engage') {
-        handleReturn();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', handleFocus);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [state, setEngageData, activeTab]);
 
   // Reset isScrollingRef on unmount to prevent stuck state
   useEffect(() => {
@@ -351,18 +270,6 @@ export function EngageTab({
     }, 100); // 100ms delay - enough for redirect to start
   };
 
-  // Advance to next card with animation
-  const advanceToNextCard = (callback?: () => void) => {
-    const nextIndex = currentPostIndex + 1;
-    if (nextIndex < (session?.posts?.length || 0)) {
-      updateEngageData({ currentPostIndex: nextIndex });
-      callback?.();
-    } else {
-      // All posts done - complete the session
-      completeSession();
-    }
-  };
-
   // Fetch claim history (for polling and initial load)
   const fetchClaimHistory = async () => {
     try {
@@ -473,7 +380,7 @@ export function EngageTab({
 
   const currentPost = session?.posts?.[currentPostIndex];
   // Progress is based on engaged posts (persists across sessions), not current feed position
-  const progress = (engagedPosts.size / 10) * 100;
+  const progress = Math.min(100, (engagedPosts.size / minToClaim) * 100);
 
   // Mandatory refresh popup - shown when posts are 20+ minutes old
   if (showMandatoryRefresh) {
@@ -819,37 +726,37 @@ export function EngageTab({
           </div>
           <p className="text-xs text-gray-500 mt-1">Post {currentPostIndex + 1} of {session?.posts?.length || 0}</p>
 
-          {/* Like Intent Toggle */}
+          {/* Reply composer toggle */}
           <div
             className="flex items-center justify-between mt-3 p-3 rounded-xl transition-all"
             style={{
-              background: likeIntentEnabled
+              background: replyIntentEnabled
                 ? 'linear-gradient(135deg, rgba(249, 84, 0, 0.08) 0%, rgba(15, 10, 11, 0.6) 100%)'
                 : 'linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(15, 10, 11, 0.6) 100%)',
               backdropFilter: 'blur(20px)',
               WebkitBackdropFilter: 'blur(20px)',
-              border: likeIntentEnabled ? '1px solid rgba(249, 84, 0, 0.3)' : '1px solid rgba(255, 255, 255, 0.08)',
-              boxShadow: likeIntentEnabled ? '0 0 20px rgba(249, 84, 0, 0.1)' : 'none'
+              border: replyIntentEnabled ? '1px solid rgba(249, 84, 0, 0.3)' : '1px solid rgba(255, 255, 255, 0.08)',
+              boxShadow: replyIntentEnabled ? '0 0 20px rgba(249, 84, 0, 0.1)' : 'none'
             }}
           >
             <div className="flex items-center gap-2">
               <div className="glass-icon glass-icon-sm glass-icon-orange">
-                <HeartIconFill className="w-3.5 h-3.5" style={ICON_GRADIENT_STYLE} />
+                <SendIconFill className="w-3.5 h-3.5" style={ICON_GRADIENT_STYLE} />
               </div>
-              <span className="text-sm font-medium text-white">Quick Like</span>
+              <span className="text-sm font-medium text-white">Quick Reply</span>
             </div>
             <button
               onClick={() => {
                 hapticFeedback('light');
-                setLikeIntentEnabled(!likeIntentEnabled);
+                setReplyIntentEnabled(!replyIntentEnabled);
               }}
               className={`relative w-11 h-6 rounded-full transition-all duration-200 ${
-                likeIntentEnabled ? 'bg-[#f95400] shadow-[0_0_12px_rgba(249,84,0,0.4)]' : 'bg-white/20'
+                replyIntentEnabled ? 'bg-[#f95400] shadow-[0_0_12px_rgba(249,84,0,0.4)]' : 'bg-white/20'
               }`}
             >
               <span
                 className={`absolute left-0 top-1 w-4 h-4 rounded-full bg-white shadow-md transition-transform duration-200 ${
-                  likeIntentEnabled ? 'translate-x-[24px]' : 'translate-x-1'
+                  replyIntentEnabled ? 'translate-x-[24px]' : 'translate-x-1'
                 }`}
               />
             </button>
@@ -1153,10 +1060,10 @@ export function EngageTab({
           <div className="mt-4 flex gap-3 relative">
             <button
               onClick={() => {
-                if (engagedPosts.size >= 10 && !isClaimLoading && !hasProcessingBatch) {
+                if (engagedPosts.size >= minToClaim && !isClaimLoading && !hasProcessingBatch) {
                   hapticFeedback('medium');
                   completeSession();
-                } else if (engagedPosts.size < 10) {
+                } else if (engagedPosts.size < minToClaim) {
                   hapticFeedback('error');
                   // Show tooltip
                   if (claimTooltipTimeoutRef.current) {
@@ -1168,7 +1075,7 @@ export function EngageTab({
                   }, 2000);
                 }
               }}
-              disabled={engagedPosts.size < 10 || isClaimLoading || hasProcessingBatch}
+              disabled={engagedPosts.size < minToClaim || isClaimLoading || hasProcessingBatch}
               className="flex-1 h-12 rounded-2xl text-sm font-semibold flex items-center justify-center gap-2 transition-all active:scale-95"
               style={{
                 background: 'linear-gradient(135deg, rgba(249, 84, 0, 0.2) 0%, rgba(255, 140, 66, 0.15) 50%, rgba(249, 84, 0, 0.18) 100%)',
@@ -1192,7 +1099,7 @@ export function EngageTab({
               ) : (
                 <>
                   <BoltIconFill className="w-5 h-5 text-white" />
-                  {engagedPosts.size >= 10 ? 'Claim' : `${engagedPosts.size}/10`}
+                  {engagedPosts.size >= minToClaim ? 'Claim' : `${engagedPosts.size}/${minToClaim}`}
                 </>
               )}
             </button>
@@ -1229,7 +1136,7 @@ export function EngageTab({
                   border: '1px solid rgba(249, 84, 0, 0.3)',
                 }}
               >
-                Minimum 10 queues to claim
+                Minimum {minToClaim} queues to claim
               </div>
             </div>
           </div>
@@ -1299,7 +1206,7 @@ export function EngageTab({
                     <ClockIconFill className="w-5 h-5 text-gray-500" />
                   </div>
                   <p className="text-xs text-gray-500">No recent claims</p>
-                  <p className="text-[10px] text-gray-600 mt-1">Engage with 10 posts to claim</p>
+                  <p className="text-[10px] text-gray-600 mt-1">Engage with {minToClaim} posts to claim</p>
                 </div>
               )}
             </div>

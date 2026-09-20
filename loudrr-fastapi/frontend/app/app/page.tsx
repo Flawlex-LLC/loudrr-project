@@ -35,11 +35,15 @@ export default function AppDispatcher() {
       }
 
       // Approved users have an account; everyone else goes to the waitlist.
+      // Only a 401 ("no account") means that — a 5xx or a network blip must
+      // not bounce an approved user into the waitlist (which bounces them
+      // straight back: a redirect loop that hammers the backend).
       try {
         await api.getUser();
         router.replace('/app/home');
-      } catch {
-        router.replace('/waitlist');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        router.replace(msg.startsWith('401') ? '/waitlist' : '/app/home');
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -53,16 +53,28 @@ export default function RootLayout({
           src="https://telegram.org/js/telegram-web-app.js"
           strategy="beforeInteractive"
         />
+        {/* Telegram opens the mini-app with the signed login (#tgWebAppData=…) in
+            the URL hash — a credential. Tags read the page URL, so drop the hash
+            before GTM loads (telegram-web-app.js has already parsed it into
+            window.Telegram.WebApp, which is all the app reads), and never load
+            GTM while Telegram still needs it. */}
         <Script
           id="gtm-script"
           strategy="afterInteractive"
           dangerouslySetInnerHTML={{
             __html: `
-              (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
-              new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
-              j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
-              'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
-              })(window,document,'script','dataLayer','${GTM_ID}');
+              (function(){
+                if ((location.hash || '').indexOf('tgWebApp') !== -1) {
+                  var tg = window.Telegram && window.Telegram.WebApp;
+                  if (!tg || !tg.initData) return;
+                  history.replaceState(history.state, '', location.pathname + location.search);
+                }
+                (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+                new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+                j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+                'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+                })(window,document,'script','dataLayer','${GTM_ID}');
+              })();
             `,
           }}
         />

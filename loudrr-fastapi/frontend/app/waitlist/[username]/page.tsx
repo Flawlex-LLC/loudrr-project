@@ -1,90 +1,57 @@
 import type { Metadata } from 'next'
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://loudrr.com'
-const BOT_USERNAME = 'loudrr_bot'
+const BOT_APP_URL = 'https://t.me/loudrr_bot/app'
 
-// Server-only. The analytics API is gated by X-API-Key; we call it in
-// generateMetadata (server-side) so the key never reaches the browser.
-const ANALYTICS_URL = process.env.LOUDRR_ANALYTICS_URL || ''
-const ANALYTICS_KEY = process.env.LOUDRR_ANALYTICS_KEY || ''
-// Server-only: used to read the LIVE tier bands so the card's label follows
-// admin retunes instead of the card route's hardcoded fallback table.
+// Server-only: the backend serves the STORED card for handles that are on
+// the waitlist (GET /waitlist/card/<handle>/) — the same score the applicant
+// sees in the mini-app. Never the legacy analytics service.
 const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || ''
 
-type Enrichment = {
-  score?: number
-  tier?: string
+type PublicCard = {
+  x_username: string
+  score: number | null
+  tier: string | null
   followers: string[]
-  followersCount?: number
+  followers_count: number
+  referral_code: string
 }
 
-/**
- * Resolve a score to the CURRENT tier name using the bands the backend
- * publishes on /settings/ (admins can retune TIER_*_THRESHOLD at runtime).
- * Returns undefined on any failure — the card route then falls back to its
- * own hardcoded table, which matches the shipped defaults.
- */
-async function resolveTier(score: number): Promise<string | undefined> {
-  if (!BACKEND_ORIGIN) return undefined
+const HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/
+
+// null = not on the waitlist (or backend unreachable): the page then makes no
+// "@handle joined" claim and shows a plain invite instead.
+async function loadCard(username: string): Promise<PublicCard | null> {
+  if (!BACKEND_ORIGIN || !HANDLE_RE.test(username)) return null
   try {
-    const res = await fetch(`${BACKEND_ORIGIN.replace(/\/$/, '')}/settings/`, {
-      next: { revalidate: 300 },
-    })
-    if (!res.ok) return undefined
-    const d = (await res.json()) as { tiers?: { name: string; min_score: number }[] }
-    // Published highest-threshold-first; first match wins.
-    const hit = (d.tiers || []).find((t) => score >= t.min_score)
-    return hit?.name
+    const res = await fetch(
+      `${BACKEND_ORIGIN.replace(/\/$/, '')}/waitlist/card/${encodeURIComponent(username)}/`,
+      { next: { revalidate: 60 }, signal: AbortSignal.timeout(4000) },
+    )
+    if (!res.ok) return null
+    return (await res.json()) as PublicCard
   } catch {
-    return undefined
+    return null
   }
 }
 
-// Best-effort enrichment. Any failure returns the empty shape — the card
-// route treats every new param as optional, so the card still renders.
-async function loadEnrichment(username: string): Promise<Enrichment> {
-  if (!ANALYTICS_URL) return { followers: [] }
-  const headers = ANALYTICS_KEY ? { 'X-API-Key': ANALYTICS_KEY } : undefined
-  const base = ANALYTICS_URL.replace(/\/$/, '')
-  const qs = `userName=${encodeURIComponent(username)}`
-
-  const [profileRes, followersRes] = await Promise.allSettled([
-    fetch(`${base}/v1/profile?${qs}`, { headers, next: { revalidate: 60 } }),
-    fetch(`${base}/v1/top-followers?${qs}&k=10`, { headers, next: { revalidate: 60 } }),
-  ])
-
-  let score: number | undefined
-  if (profileRes.status === 'fulfilled' && profileRes.value.ok) {
-    const d = (await profileRes.value.json().catch(() => ({}))) as {
-      found?: boolean
-      score?: number
-    }
-    if (d.found && typeof d.score === 'number') score = d.score
-  }
-
-  let followers: string[] = []
-  if (followersRes.status === 'fulfilled' && followersRes.value.ok) {
-    const d = (await followersRes.value.json().catch(() => ({}))) as {
-      users?: { username?: string }[]
-    }
-    followers = (d.users || [])
-      .map((u) => (u.username || '').trim())
-      .filter(Boolean)
-      .slice(0, 10)
-  }
-
-  const tier = typeof score === 'number' ? await resolveTier(score) : undefined
-
-  return { score, tier, followers, followersCount: followers.length || undefined }
-}
-
-function buildCardUrl(base: string, username: string, e: Enrichment): string {
+function buildCardUrl(base: string, username: string, card: PublicCard | null): string {
   const p = new URLSearchParams({ username })
-  if (typeof e.score === 'number') p.set('score', String(Math.round(e.score)))
-  if (e.tier) p.set('tier', e.tier)
-  if (e.followers.length) p.set('followers', e.followers.join(','))
-  if (typeof e.followersCount === 'number') p.set('followersCount', String(e.followersCount))
+  if (card) {
+    if (typeof card.score === 'number') p.set('score', String(Math.floor(card.score)))
+    if (card.tier) p.set('tier', card.tier)
+    if (card.followers.length) {
+      p.set('followers', card.followers.join(','))
+      p.set('followersCount', String(card.followers_count))
+    }
+  }
   return `${base}/api/cards/waitlist?${p.toString()}`
+}
+
+// the join link carries the sharer's referral code, so a signup from their
+// post is credited to them
+function joinUrl(card: PublicCard | null): string {
+  return card?.referral_code ? `${BOT_APP_URL}?startapp=ref_${card.referral_code}` : BOT_APP_URL
 }
 
 export async function generateMetadata({
@@ -93,14 +60,24 @@ export async function generateMetadata({
   params: Promise<{ username: string }>
 }): Promise<Metadata> {
   const { username } = await params
-  const enrichment = await loadEnrichment(username)
-  const cardUrl = buildCardUrl(SITE_URL, username, enrichment)
+  const card = await loadCard(username)
+  const description = 'Loudrr is a karma-based attention marketplace. Earn karma by engaging with posts. Spend karma to get engagement on yours.'
 
+  if (!card) {
+    return {
+      title: 'Join the Loudrr waitlist',
+      description,
+      openGraph: { title: 'Join the Loudrr waitlist', description, type: 'website' },
+    }
+  }
+
+  const handle = card.x_username
+  const cardUrl = buildCardUrl(SITE_URL, handle, card)
   return {
-    title: `@${username} joined the Loudrr waitlist`,
-    description: 'Loudrr is a karma-based attention marketplace. Earn karma by engaging with posts. Spend karma to get engagement on yours.',
+    title: `@${handle} joined the Loudrr waitlist`,
+    description,
     openGraph: {
-      title: `@${username} joined the Loudrr waitlist`,
+      title: `@${handle} joined the Loudrr waitlist`,
       description: 'Join the waitlist for Loudrr - earn karma by engaging.',
       type: 'website',
       images: [
@@ -108,13 +85,13 @@ export async function generateMetadata({
           url: cardUrl,
           width: 1012,
           height: 638,
-          alt: `@${username} on the Loudrr waitlist`,
+          alt: `@${handle} on the Loudrr waitlist`,
         },
       ],
     },
     twitter: {
       card: 'summary_large_image',
-      title: `@${username} joined the Loudrr waitlist`,
+      title: `@${handle} joined the Loudrr waitlist`,
       description: 'Join the waitlist for Loudrr - earn karma by engaging.',
       images: [cardUrl],
     },
@@ -127,9 +104,7 @@ export default async function WaitlistSharePage({
   params: Promise<{ username: string }>
 }) {
   const { username } = await params
-  const enrichment = await loadEnrichment(username)
-  const cardUrl = buildCardUrl('', username, enrichment)
-  const botLink = `https://t.me/${BOT_USERNAME}`
+  const card = await loadCard(username)
 
   return (
     <div
@@ -143,22 +118,24 @@ export default async function WaitlistSharePage({
         padding: '24px',
       }}
     >
-      {/* Card image */}
-      <img
-        src={cardUrl}
-        alt={`@${username} on the Loudrr waitlist`}
-        style={{
-          width: '100%',
-          maxWidth: '506px',
-          borderRadius: '16px',
-          border: '1px solid rgba(249, 84, 0, 0.3)',
-          marginBottom: '32px',
-        }}
-      />
+      {/* Card image — only for handles actually on the waitlist */}
+      {card && (
+        <img
+          src={buildCardUrl('', card.x_username, card)}
+          alt={`@${card.x_username} on the Loudrr waitlist`}
+          style={{
+            width: '100%',
+            maxWidth: '506px',
+            borderRadius: '16px',
+            border: '1px solid rgba(249, 84, 0, 0.3)',
+            marginBottom: '32px',
+          }}
+        />
+      )}
 
       {/* CTA */}
       <a
-        href={botLink}
+        href={joinUrl(card)}
         style={{
           display: 'inline-flex',
           alignItems: 'center',

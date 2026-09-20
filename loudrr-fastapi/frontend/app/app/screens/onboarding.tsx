@@ -24,7 +24,7 @@ export function OnboardingScreen({
     setError(null);
 
     try {
-      const result = await api.completeOnboarding();
+      await api.completeOnboarding();
       hapticFeedback('success');
 
       // Refetch user to get updated data
@@ -32,6 +32,8 @@ export function OnboardingScreen({
     } catch (err: any) {
       setError(err.message || 'Something went wrong');
       hapticFeedback('error');
+    } finally {
+      // if the refetch leaves us on this screen, the button must work again
       setLoading(false);
     }
   };

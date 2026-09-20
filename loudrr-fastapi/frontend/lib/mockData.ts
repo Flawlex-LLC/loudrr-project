@@ -266,7 +266,7 @@ export function getMockResponse(endpoint: string): unknown | undefined {
     case '/waitlist/x-oauth/proof/':
       // Server-side proof handoff poll — design mode never has one pending
       // (the Connect X button short-circuits with a fake proof instead).
-      return { proof: null };
+      return { proof: null, x_username: null, expires_in: null, error: null };
 
     case '/feature-interest/':
       return { registered: false, success: true };
@@ -280,7 +280,22 @@ export function getMockResponse(endpoint: string): unknown | undefined {
         score: 450,
         tier: 'Based',
         followers: ['elonmusk', 'vitalikbuterin', 'balajis', 'naval', 'sama'],
-        followers_count: 5,
+        followers_count: 212,
+        score_status: 'ready',
+        score_updated_at: new Date(Date.now() - 3600_000).toISOString(),
+      };
+
+    case '/user/refresh-score/':
+      return {
+        x_username: 'alexrivera',
+        score: 468,
+        tier: 'Based',
+        followers: ['elonmusk', 'vitalikbuterin', 'balajis', 'naval', 'sama'],
+        followers_count: 215,
+        score_status: 'ready',
+        score_updated_at: new Date().toISOString(),
+        result: 'updated',
+        retry_after_seconds: 0,
       };
 
     case '/waitlist/status/':

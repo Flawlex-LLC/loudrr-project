@@ -2,8 +2,8 @@
 
 import { useState } from 'react';
 import { hapticFeedback } from '@/lib/telegram';
-import { User } from '@/lib/api';
-import { ICON_GRADIENT_STYLE, formatKarma, getScoreMultiplier, getScoreTier } from '../shared';
+import { api, AppSettings, User } from '@/lib/api';
+import { ICON_GRADIENT_STYLE, describeScoreRefresh, formatKarma, getScoreMultiplier, getScoreTier } from '../shared';
 import { BoltIconFill, WalletIconFill, TrophyIconFill, XIconFill, TrendingUpIconFill, TargetIconFill } from '../icons';
 import { StreakCard } from '../components/leaf';
 
@@ -12,8 +12,49 @@ import { StreakCard } from '../components/leaf';
  * Extracted from app/app/page.tsx during the modularization refactor.
  */
 
-export function HomeTab({ user, onRefresh }: { user: User | null; onRefresh: () => void }) {
+// Shipped defaults — only used until /settings/ (the live, admin-tunable
+// bands) has loaded. Mirrors backend services/tier.py.
+const DEFAULT_TIERS = [
+  { name: 'GOAT', min_score: 1000, multiplier: 1.35 },
+  { name: 'OG', min_score: 800, multiplier: 1.3 },
+  { name: 'Legend', min_score: 600, multiplier: 1.25 },
+  { name: 'Based', min_score: 400, multiplier: 1.2 },
+  { name: 'Degen', min_score: 200, multiplier: 1.15 },
+  { name: 'Normie', min_score: 100, multiplier: 1.1 },
+  { name: 'Anon', min_score: 0, multiplier: 1.0 },
+];
+
+export function HomeTab({
+  user,
+  onRefresh,
+  tiers,
+}: {
+  user: User | null;
+  onRefresh: () => void | Promise<void>;
+  tiers?: AppSettings['tiers'];
+}) {
   const [showTierInfo, setShowTierInfo] = useState(false);
+  const [refreshingScore, setRefreshingScore] = useState(false);
+  const [scoreNote, setScoreNote] = useState<string | null>(null);
+
+  // Scores are fetched at sign-up and when the user taps this — no scheduler.
+  const handleRefreshScore = async () => {
+    if (refreshingScore) return;
+    hapticFeedback('light');
+    setRefreshingScore(true);
+    setScoreNote(null);
+    try {
+      const result = await api.refreshScore();
+      setScoreNote(describeScoreRefresh(result));
+      hapticFeedback(result.result === 'updated' ? 'success' : 'warning');
+      if (result.result === 'updated') await onRefresh();
+    } catch (e) {
+      setScoreNote(e instanceof Error ? e.message : 'Could not refresh your score.');
+      hapticFeedback('error');
+    } finally {
+      setRefreshingScore(false);
+    }
+  };
 
   if (!user) {
     return (
@@ -25,19 +66,21 @@ export function HomeTab({ user, onRefresh }: { user: User | null; onRefresh: () 
   }
 
   const tweetscoutScore = user.tweetscout_score || 0;
-  const scoreMultiplier = getScoreMultiplier(tweetscoutScore);
-  const scoreTier = getScoreTier(tweetscoutScore);
+  // The tier the BACKEND assigned (it follows admin retunes) and the live
+  // bands from /settings/; the hardcoded helpers are only a pre-load fallback.
+  const bands = tiers && tiers.length ? tiers : DEFAULT_TIERS;
+  const scoreTier = user.tier || getScoreTier(tweetscoutScore);
+  const currentBand = bands.find((b) => b.name === scoreTier);
+  const scoreMultiplier = typeof currentBand?.multiplier === 'number'
+    ? `${currentBand.multiplier.toFixed(2)}x`
+    : getScoreMultiplier(tweetscoutScore);
 
   // Tier data for the info modal
-  const tierData = [
-    { name: 'GOAT', minPoints: 1000, multiplier: '1.35x' },
-    { name: 'OG', minPoints: 800, multiplier: '1.30x' },
-    { name: 'Legend', minPoints: 600, multiplier: '1.25x' },
-    { name: 'Based', minPoints: 400, multiplier: '1.20x' },
-    { name: 'Degen', minPoints: 200, multiplier: '1.15x' },
-    { name: 'Normie', minPoints: 100, multiplier: '1.10x' },
-    { name: 'Anon', minPoints: 0, multiplier: '1.0x' },
-  ];
+  const tierData = bands.map((b) => ({
+    name: b.name,
+    minPoints: b.min_score,
+    multiplier: typeof b.multiplier === 'number' ? `${b.multiplier.toFixed(2)}x` : '',
+  }));
 
   return (
     <div className="p-4 space-y-4">
@@ -267,8 +310,26 @@ export function HomeTab({ user, onRefresh }: { user: User | null; onRefresh: () 
 
             {/* Note */}
             <p className="text-xs text-gray-500 text-center">
-              Your TweetScout score is <span className="text-[#f95400]">{Math.round(tweetscoutScore)}</span> and determines your multiplier
+              Your score is <span className="text-[#f95400]">{Math.floor(tweetscoutScore).toLocaleString('en-US')}</span> and determines your multiplier
             </p>
+
+            {/* Refresh — the only way a score updates after sign-up */}
+            <div className="mt-3 flex flex-col items-center gap-1.5">
+              <button
+                onClick={handleRefreshScore}
+                disabled={refreshingScore}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-white transition-all active:scale-95 disabled:opacity-60"
+                style={{
+                  background: 'rgba(249, 84, 0, 0.12)',
+                  border: '1px solid rgba(249, 84, 0, 0.35)',
+                }}
+              >
+                {refreshingScore ? 'Refreshing…' : 'Refresh score'}
+              </button>
+              {scoreNote && (
+                <p className="text-[11px] text-gray-400 text-center">{scoreNote}</p>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -94,10 +94,15 @@ export default function TabsLayout({ children }: { children: React.ReactNode }) 
         ]);
         setUser(userData);
         setSettings(settingsData);
-      } catch {
-        // No account / still on waitlist
-        router.replace('/waitlist');
-        return;
+      } catch (err) {
+        // Only a 401 means "no account / still on the waitlist". Anything
+        // else (5xx, timeout) shows the Retry screen — redirecting would
+        // loop with /waitlist, which sends approved users straight back.
+        if (err instanceof Error && err.message.startsWith('401')) {
+          router.replace('/waitlist');
+          return;
+        }
+        throw err;
       }
     } catch (err) {
       console.error('Failed to load initial data:', err);

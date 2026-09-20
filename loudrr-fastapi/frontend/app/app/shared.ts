@@ -5,7 +5,7 @@
  * Extracted from app/app/page.tsx during the modularization refactor.
  */
 import React, { useEffect } from 'react';
-import type { SessionResponse, CompleteResponse, ClaimBatch } from '@/lib/api';
+import type { SessionResponse, CompleteResponse, ClaimBatch, ScoreRefreshResult } from '@/lib/api';
 
 // ---- Types ----------------------------------------------------------------
 
@@ -104,6 +104,23 @@ export function getScoreTier(score: number): string {
   if (score >= 200) return "Degen";
   if (score >= 100) return "Normie";
   return "Anon";
+}
+
+/** One-line status for a Refresh score tap (POST /user/refresh-score/). */
+export function describeScoreRefresh(r: ScoreRefreshResult): string {
+  switch (r.result) {
+    case 'updated':
+      return r.score !== null ? `Score updated: ${Math.round(r.score).toLocaleString('en-US')}` : 'Score updated';
+    case 'not_found':
+      return "No score for your X account yet. Try again later.";
+    case 'cooldown': {
+      const minutes = Math.max(1, Math.ceil(r.retry_after_seconds / 60));
+      return `Updated recently. Try again in ${minutes} min.`;
+    }
+    case 'unavailable':
+    default:
+      return 'Score service is busy. Try again in a few minutes.';
+  }
 }
 
 // ---- Hooks ----------------------------------------------------------------

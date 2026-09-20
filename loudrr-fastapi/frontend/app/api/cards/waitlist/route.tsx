@@ -7,6 +7,63 @@ export const runtime = 'edge'
 const SPACE_GROTESK_BOLD_URL = 'https://fonts.gstatic.com/s/spacegrotesk/v22/V8mQoQDjQSkFtoMM3T6r8E7mF71Q-gOoraIAEj4PVksj.ttf'
 const SYNE_BOLD_URL = 'https://fonts.gstatic.com/s/syne/v24/8vIS7w4qzmVxsWxjBZRjr0FKM_3fvj6k.ttf'
 
+// X handles: letters, digits, underscore, max 15. Anything else is not a
+// handle — the card is public, so nothing free-text reaches the image.
+const HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/
+// Tier names the backend can assign (services/tier.py _TIER_KEYS). The `tier`
+// param is only trusted when it's one of these — never arbitrary text on a
+// Loudrr-branded image.
+const KNOWN_TIERS = new Set(['GOAT', 'OG', 'LEGEND', 'BASED', 'DEGEN', 'NORMIE', 'ANON'])
+
+// The card's numbers come from the BACKEND's stored card for this handle
+// (GET /waitlist/card/<handle>/), never from query params: this image is public
+// and Loudrr-branded, so "?score=99999" must not mint a fake GOAT card for
+// anyone. Handles not on the waitlist get a 404. Query params other than
+// `username` are ignored — callers still pass score/tier, which conveniently
+// changes the URL (and busts image caches) whenever the score changes.
+const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || ''
+
+type StoredCard = {
+  x_username: string
+  score: number | null
+  tier: string | null
+  followers: string[]
+  followers_count: number
+}
+
+async function loadStoredCard(username: string): Promise<StoredCard | null | 'unavailable'> {
+  if (!BACKEND_ORIGIN) return 'unavailable'
+  try {
+    const res = await fetch(
+      `${BACKEND_ORIGIN.replace(/\/$/, '')}/waitlist/card/${encodeURIComponent(username)}/`,
+      { cache: 'no-store', signal: AbortSignal.timeout(3000) },
+    )
+    if (res.status === 404) return null
+    if (!res.ok) return 'unavailable'
+    return (await res.json()) as StoredCard
+  } catch {
+    return 'unavailable'
+  }
+}
+
+// Fonts are fetched once per server instance, not on every render (a card is
+// requested for every share-link preview).
+let fontsPromise: Promise<[ArrayBuffer, ArrayBuffer]> | null = null
+function loadFonts(): Promise<[ArrayBuffer, ArrayBuffer]> {
+  if (!fontsPromise) {
+    const get = (u: string) =>
+      fetch(u).then((res) => {
+        if (!res.ok) throw new Error(`font ${res.status}`)
+        return res.arrayBuffer()
+      })
+    fontsPromise = Promise.all([get(SYNE_BOLD_URL), get(SPACE_GROTESK_BOLD_URL)]).catch((e) => {
+      fontsPromise = null // retry on the next request instead of caching a failure
+      throw e
+    })
+  }
+  return fontsPromise
+}
+
 // FALLBACK tier table — mirrors the SHIPPED DEFAULTS of backend
 // app/services/tier.py. Admins can retune those thresholds at runtime
 // (TIER_*_THRESHOLD site settings), and this edge route can't import the
@@ -41,38 +98,42 @@ const SLOTS: { left: number; top: number }[] = [
 ]
 
 export async function GET(request: NextRequest) {
-  // Load fonts in parallel
-  const [syneFontData, spaceGroteskFontData] = await Promise.all([
-    fetch(SYNE_BOLD_URL).then(res => res.arrayBuffer()),
-    fetch(SPACE_GROTESK_BOLD_URL).then(res => res.arrayBuffer()),
-  ])
 
   // Build logo URL from request origin (works in dev + prod)
   const url = new URL(request.url)
   const LOGO_URL = `${url.origin}/loudrr-icon-small.png`
 
   const { searchParams } = url
-  const xUsername = searchParams.get('username') || 'user'
-  const displayName = searchParams.get('displayName') || xUsername
+  const xUsername = (searchParams.get('username') || '').replace(/^@/, '')
+  if (!HANDLE_RE.test(xUsername)) {
+    return new Response('invalid username', { status: 400 })
+  }
+  const stored = await loadStoredCard(xUsername)
+  if (stored === null) {
+    return new Response('not on the waitlist', { status: 404 })
+  }
+  // backend unreachable: a bare card (handle only) rather than a broken image
+  const card = stored === 'unavailable' ? null : stored
+  const handle = card?.x_username && HANDLE_RE.test(card.x_username) ? card.x_username : xUsername
+  const displayName = handle
+  const [syneFontData, spaceGroteskFontData] = await loadFonts()
 
-  // New Variant C params — all optional so old callers still render a valid card.
-  const scoreRaw = searchParams.get('score')
-  const scoreNum = scoreRaw !== null && scoreRaw !== '' ? Number(scoreRaw) : NaN
+  const scoreNum = typeof card?.score === 'number' ? card.score : NaN
   const hasScore = Number.isFinite(scoreNum) && scoreNum >= 0
-  const scoreLabel = hasScore ? Math.round(Math.min(scoreNum, 99999)).toLocaleString('en-US') : ''
-  const tierLabel = (searchParams.get('tier') || (hasScore ? tierFor(scoreNum) : '')).toUpperCase()
+  // floor, like the backend's tier cut-off (399.6 is not "400")
+  const scoreLabel = hasScore ? Math.floor(Math.min(scoreNum, 99999)).toLocaleString('en-US') : ''
+  const storedTier = (card?.tier || '').toUpperCase()
+  const tierLabel = KNOWN_TIERS.has(storedTier) ? storedTier : hasScore ? tierFor(scoreNum) : ''
 
-  // Comma-separated X usernames of top smart followers. We proxy avatars
-  // through unavatar.io/x/<u> — deterministic per username, cached,
-  // no need to plumb image URLs through the analytics API.
-  const followersRaw = searchParams.get('followers') || ''
-  const followerUsernames = followersRaw
-    .split(',')
+  // Top smart followers' X handles; avatars come from unavatar.io/x/<u>.
+  const followerUsernames = (card?.followers || [])
     .map(s => s.trim().replace(/^@/, ''))
-    .filter(Boolean)
+    .filter(u => HANDLE_RE.test(u))
     .slice(0, 10)
-  const parsedFollowersCount = Number(searchParams.get('followersCount') || followerUsernames.length) || 0
-  const followersCount = Math.max(0, Math.min(parsedFollowersCount, 9999))
+  // the provider's real smart-follower total (can be tens of thousands for big
+  // accounts), not just the avatars shown
+  const followersCount = Math.max(0, Math.min(Math.round(card?.followers_count || 0), 999999))
+  const smartCount = followersCount || followerUsernames.length
 
   return new ImageResponse(
     (
@@ -279,7 +340,7 @@ export async function GET(request: NextRequest) {
                   {displayName[0]?.toUpperCase() || 'U'}
                 </span>
                 <img
-                  src={`https://unavatar.io/x/${xUsername}?fallback=false`}
+                  src={`https://unavatar.io/x/${handle}?fallback=false`}
                   width={80}
                   height={80}
                   style={{
@@ -307,7 +368,7 @@ export async function GET(request: NextRequest) {
                   <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
                 </svg>
                 <span style={{ fontSize: '32px', fontWeight: 700, color: '#ffffff', fontFamily: 'Space Grotesk', letterSpacing: '-0.5px' }}>
-                  @{xUsername}
+                  @{handle}
                 </span>
               </div>
             </div>
@@ -407,7 +468,7 @@ export async function GET(request: NextRequest) {
                   letterSpacing: '0.2px',
                 }}
               >
-                Followed by {followersCount || followerUsernames.length} smart {(followersCount || followerUsernames.length) === 1 ? 'account' : 'accounts'}
+                Followed by {smartCount.toLocaleString('en-US')} smart {smartCount === 1 ? 'account' : 'accounts'}
               </span>
             </div>
           )}

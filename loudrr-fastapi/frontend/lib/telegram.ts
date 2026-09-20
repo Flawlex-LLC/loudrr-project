@@ -107,17 +107,22 @@ export function initTelegramWebApp() {
     tg.ready();
     tg.expand();
 
-    // Capture referral start_param (t.me/<bot>/app?startapp=ref_<code>) into
-    // sessionStorage BEFORE any router.replace drops query params. The
-    // waitlist registration screen reads 'loudrr_ref' as a fallback.
+    // Capture referral start_param (t.me/<bot>/app?startapp=ref_<code>)
+    // BEFORE any router.replace drops query params. Kept in localStorage too:
+    // sessionStorage dies with the WebView, and applicants often leave for X
+    // (OAuth) and come back to a fresh one. The registration screen reads
+    // 'loudrr_ref' and validates it.
     try {
       const sp = (window as any)?.Telegram?.WebApp?.initDataUnsafe?.start_param;
       if (typeof sp === 'string') {
-        const match = sp.match(/^ref_(.+)$/);
-        if (match) sessionStorage.setItem('loudrr_ref', match[1]);
+        const match = sp.match(/^ref_([A-Za-z0-9_-]{4,16})$/);
+        if (match) {
+          sessionStorage.setItem('loudrr_ref', match[1]);
+          localStorage.setItem('loudrr_ref', match[1]);
+        }
       }
     } catch {
-      // sessionStorage unavailable — referral attribution is best-effort.
+      // storage unavailable — referral attribution is best-effort.
     }
   }
 }

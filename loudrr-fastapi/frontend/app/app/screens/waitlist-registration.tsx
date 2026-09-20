@@ -10,54 +10,50 @@ import { BoltIconFill, XLogoIcon } from '../icons';
 /**
  * Loudrr Mini App — WaitlistRegistrationScreen
  *
- * Flow (post-OAuth-first refactor):
- *   Step 1: "Connect X" — one button. Kicks off backend OAuth start, opens
- *           X in an external tab, then polls sessionStorage for the signed
- *           proof that /waitlist/oauth-return dropped there on return.
+ * Flow (OAuth-first):
+ *   Step 1: "Connect X" — backend OAuth start, X opens in the SYSTEM browser
+ *           (Telegram openLink). That browser can't talk to this WebView, so
+ *           we poll GET /waitlist/x-oauth/proof/ until the backend reports the
+ *           outcome: a signed proof + the verified handle, or an error code.
  *   Step 2: Region.
  *   Step 3: Niche + other platforms + submit (with the proof in the body).
  *
- * The X handle is never typed by the user — it comes from the OAuth /users/me
- * call server-side and is baked into the signed proof. Client-side we decode
- * the first segment of the itsdangerous token only for display; the server
- * re-verifies signature + freshness on register.
+ * The X handle is never typed by the user and never decoded from the token
+ * client-side (itsdangerous compresses it — the old decoder returned null and
+ * silently blocked Join for everyone). It comes from the poll response and
+ * the register response. The server re-verifies the proof on register.
  */
 
 const PROOF_KEY = 'x_oauth_proof';
-const PROOF_IAT_KEY = 'x_oauth_proof_iat';
-const PROOF_ERR_KEY = 'x_oauth_error';
-// Client-side freshness bound. Server enforces 10-min max_age on the signed
-// proof itself; we tighten to 8 min here so a user coming back to a
-// backgrounded tab gets an obvious "Please connect X again" instead of
-// silently advancing through the whole form and 400-ing at submit.
-const PROOF_MAX_AGE_MS = 8 * 60 * 1000;
+const PROOF_USER_KEY = 'x_oauth_username';
+const PROOF_EXP_KEY = 'x_oauth_proof_exp'; // epoch ms when the proof stops being valid
+const REF_KEY = 'loudrr_ref';
+// stop "Waiting for X…" if nothing comes back — X logins rarely take this long
+const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+const POLL_EVERY_MS = 2500;
+const POLL_BACKOFF_MS = 10_000;
+// leave a margin so a proof isn't used seconds before the server rejects it
+const PROOF_SAFETY_MS = 30_000;
 
 const OAUTH_ERROR_COPY: Record<string, string> = {
   denied: 'You cancelled the X authorization. Try again to continue.',
   invalid: 'X returned an invalid response. Please try again.',
-  expired: 'Your session timed out. Please connect X again.',
+  expired: 'Your X session timed out. Please connect X again.',
   token: "Couldn't complete the handshake with X. Please try again.",
   profile: "Couldn't read your X profile. Please try again.",
+  cancelled: 'That connection was cancelled in the browser. Tap Connect X to try again.',
 };
 
-/**
- * itsdangerous URLSafeTimedSerializer emits `<b64json>.<b64ts>.<b64sig>`.
- * The first dot-separated segment is url-safe-base64 of the JSON payload.
- * We ONLY use this for a display hint (the verified @handle shown on step 2);
- * the server re-verifies the signature and enforces max_age on submit.
- */
-function decodeProofUsername(proof: string): string | null {
+/** Referral codes are 8 chars of [A-Z0-9_-]; anything else is dropped so a
+ * mangled share link can't break sign-up. */
+function cleanReferral(raw: string | null | undefined): string | null {
+  const code = (raw || '').trim().toUpperCase();
+  return /^[A-Z0-9_-]{4,16}$/.test(code) ? code : null;
+}
+
+function readStored(key: string): string | null {
   try {
-    const first = proof.split('.')[0];
-    if (!first) return null;
-    // url-safe base64: convert to standard b64 and pad
-    let b64 = first.replace(/-/g, '+').replace(/_/g, '/');
-    while (b64.length % 4) b64 += '=';
-    const json = typeof atob === 'function' ? atob(b64) : '';
-    if (!json) return null;
-    const payload = JSON.parse(json);
-    if (payload && typeof payload.x_username === 'string') return payload.x_username;
-    return null;
+    return sessionStorage.getItem(key) ?? localStorage.getItem(key);
   } catch {
     return null;
   }
@@ -81,141 +77,133 @@ export function WaitlistRegistrationScreen({
   const [loading, setLoading] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [waitingForOAuth, setWaitingForOAuth] = useState(false);
+  // someone authorized on X but hasn't confirmed the link in the browser yet
+  // (that confirm step is what stops a forwarded authorize link binding
+  // someone else's X account to this Telegram account)
+  const [awaitingConfirm, setAwaitingConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Get referral code from URL query param (e.g., ?ref=ABC123), falling back
-  // to the value stashed in sessionStorage by the Telegram start_param capture
-  // (startapp deep links don't survive router.replace as query params).
+  // Referral: ?ref= on the URL, else what the Telegram startapp capture
+  // stored (session first, then local — survives a WebView restart).
   const [referralCode, setReferralCode] = useState<string | null>(null);
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      let ref = params.get('ref');
-      if (!ref) {
-        try {
-          ref = sessionStorage.getItem('loudrr_ref');
-        } catch { /* sessionStorage unavailable */ }
-      }
-      if (ref) {
-        setReferralCode(ref);
-        console.log('Referral code detected:', ref);
-      }
-    }
+    if (typeof window === 'undefined') return;
+    const fromUrl = new URLSearchParams(window.location.search).get('ref');
+    setReferralCode(cleanReferral(fromUrl) ?? cleanReferral(readStored(REF_KEY)));
   }, []);
 
-  // Pick up the proof (or an error) that /waitlist/oauth-return stashed for us.
-  const consumeStoredProof = useCallback(() => {
-    if (typeof window === 'undefined') return false;
+  const forgetProof = useCallback(() => {
     try {
-      const err = sessionStorage.getItem(PROOF_ERR_KEY);
-      if (err) {
-        sessionStorage.removeItem(PROOF_ERR_KEY);
-        setError(OAUTH_ERROR_COPY[err] || 'X authorization failed. Please try again.');
-        setWaitingForOAuth(false);
-        hapticFeedback('error');
-      }
-      const proof = sessionStorage.getItem(PROOF_KEY);
-      if (!proof) return false;
-
-      // Freshness check — stale proofs go to the wall, user is bounced back
-      // to step 1 with an actionable message. Without this, the user would
-      // march to step 3 and 400 at submit.
-      const iatStr = sessionStorage.getItem(PROOF_IAT_KEY);
-      const iat = iatStr ? Number(iatStr) : NaN;
-      const ageOk = Number.isFinite(iat) && Date.now() - iat < PROOF_MAX_AGE_MS;
-      if (!ageOk) {
-        sessionStorage.removeItem(PROOF_KEY);
-        sessionStorage.removeItem(PROOF_IAT_KEY);
-        setXProof(null);
-        setXUsername(null);
-        setStep(1);
-        setWaitingForOAuth(false);
-        setError('Your X session expired. Please connect X again.');
-        hapticFeedback('error');
-        return false;
-      }
-
-      const username = decodeProofUsername(proof);
-      setXProof(proof);
-      setXUsername(username);
-      setStep(s => (s < 2 ? 2 : s));
-      setWaitingForOAuth(false);
-      setError(null);
-      hapticFeedback('success');
-      return true;
-    } catch {
-      // sessionStorage unavailable — no-op.
-    }
-    return false;
+      for (const key of [PROOF_KEY, PROOF_USER_KEY, PROOF_EXP_KEY]) sessionStorage.removeItem(key);
+    } catch { /* storage unavailable */ }
   }, []);
 
-  // Mount check — user may already have OAuth'd in a prior visit.
+  const applyProof = useCallback((proof: string, username: string | null, expiresInSec: number | null) => {
+    const expiresAt = Date.now() + Math.max(0, (expiresInSec ?? 600) * 1000 - PROOF_SAFETY_MS);
+    try {
+      sessionStorage.setItem(PROOF_KEY, proof);
+      sessionStorage.setItem(PROOF_USER_KEY, username || '');
+      sessionStorage.setItem(PROOF_EXP_KEY, String(expiresAt));
+    } catch { /* storage unavailable — state below still carries it */ }
+    setXProof(proof);
+    setXUsername(username);
+    setStep((s) => (s < 2 ? 2 : s));
+    setWaitingForOAuth(false);
+    setError(null);
+  }, []);
+
+  // Full reset back to step 1 (expired proof, X account taken, user's choice).
+  const resetToConnectX = useCallback((message: string | null) => {
+    forgetProof();
+    setXProof(null);
+    setXUsername(null);
+    setWaitingForOAuth(false);
+    setAwaitingConfirm(false);
+    setStep(1);
+    setError(message);
+    if (message) hapticFeedback('error');
+  }, [forgetProof]);
+
+  // Mount: restore a still-valid proof from this WebView session, then ask
+  // the server — it keeps the proof until registration, so a restart of
+  // Telegram mid-flow doesn't cost another trip to X.
   useEffect(() => {
-    consumeStoredProof();
+    if (DESIGN_MODE) return;
+    let cancelled = false;
+    const exp = Number(readStored(PROOF_EXP_KEY));
+    const stored = readStored(PROOF_KEY);
+    if (stored && Number.isFinite(exp) && exp > Date.now()) {
+      applyProof(stored, readStored(PROOF_USER_KEY) || null, Math.round((exp - Date.now()) / 1000) + PROOF_SAFETY_MS / 1000);
+    } else if (stored) {
+      forgetProof();
+    }
+    (async () => {
+      try {
+        const r = await api.pollWaitlistXOAuthProof();
+        if (cancelled) return;
+        if (r.proof) applyProof(r.proof, r.x_username, r.expires_in);
+      } catch { /* not signed in / offline — the Connect X button still works */ }
+    })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Guard against overlapping server-side proof polls.
-  const proofPollInFlight = useRef(false);
-
-  // While waiting for OAuth to return, poll sessionStorage + listen for
-  // window focus (Telegram in-app browser fires visibilitychange when the
-  // user swipes back to the WebView).
-  //
-  // ALSO poll the backend for a server-stored proof: inside Telegram,
-  // openLink() completes the OAuth chain in the external SYSTEM browser,
-  // whose sessionStorage the mini-app WebView can never see. The backend
-  // stores the minted proof keyed by telegram_id; we fetch and consume it
-  // here, then feed it through the same sessionStorage path.
+  // While waiting for OAuth: poll the backend for the outcome. Errors end the
+  // wait with a message; a failing poll (429 / network) backs off; and the
+  // wait gives up after POLL_TIMEOUT_MS instead of spinning forever.
+  const pollInFlight = useRef(false);
   useEffect(() => {
-    if (!waitingForOAuth || xProof) return;
-    const pollServerProof = async () => {
-      if (DESIGN_MODE || proofPollInFlight.current) return;
-      proofPollInFlight.current = true;
+    if (!waitingForOAuth || xProof || DESIGN_MODE) return;
+    const startedAt = Date.now();
+    let backoffUntil = 0;
+    let stopped = false;
+
+    const tick = async () => {
+      if (stopped || pollInFlight.current || Date.now() < backoffUntil) return;
+      if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+        stopped = true;
+        setWaitingForOAuth(false);
+        setError("We didn't hear back from X. Tap Connect X to try again.");
+        hapticFeedback('error');
+        return;
+      }
+      pollInFlight.current = true;
       try {
-        const { proof } = await api.pollWaitlistXOAuthProof();
-        if (proof) {
-          try {
-            sessionStorage.setItem(PROOF_KEY, proof);
-            sessionStorage.setItem(PROOF_IAT_KEY, String(Date.now()));
-          } catch { /* sessionStorage unavailable */ }
-          // The server row is consumed (one-shot DELETE...RETURNING) — never
-          // depend on the sessionStorage round-trip alone. If the stored copy
-          // isn't readable back, apply the proof to state directly so it
-          // can't be lost.
-          if (!consumeStoredProof()) {
-            setXProof(proof);
-            setXUsername(decodeProofUsername(proof));
-            setStep(s => (s < 2 ? 2 : s));
-            setWaitingForOAuth(false);
-            setError(null);
-            hapticFeedback('success');
-          }
+        const r = await api.pollWaitlistXOAuthProof();
+        if (stopped) return;
+        if (r.proof) {
+          stopped = true;
+          setAwaitingConfirm(false);
+          applyProof(r.proof, r.x_username, r.expires_in);
+          hapticFeedback('success');
+        } else if (r.error) {
+          stopped = true;
+          setAwaitingConfirm(false);
+          setWaitingForOAuth(false);
+          setError(OAUTH_ERROR_COPY[r.error] || 'X authorization failed. Please try again.');
+          hapticFeedback('error');
+        } else if (r.awaiting_confirmation) {
+          setAwaitingConfirm(true);
         }
       } catch {
-        // best-effort — keep polling
+        backoffUntil = Date.now() + POLL_BACKOFF_MS;
       } finally {
-        proofPollInFlight.current = false;
+        pollInFlight.current = false;
       }
     };
-    // 2.5s = 24 requests/minute, safely under the endpoint's 30/minute limit
-    // (a 1.5s tick would trip 429s after ~45s of waiting).
-    const interval = window.setInterval(() => {
-      consumeStoredProof();
-      void pollServerProof();
-    }, 2500);
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') consumeStoredProof();
+
+    const interval = window.setInterval(() => { void tick(); }, POLL_EVERY_MS);
+    // Telegram fires visibilitychange when the user swipes back from the browser
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void tick();
     };
-    const onFocus = () => consumeStoredProof();
-    document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
+      stopped = true;
       window.clearInterval(interval);
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [waitingForOAuth, xProof, consumeStoredProof]);
+  }, [waitingForOAuth, xProof, applyProof]);
 
   const togglePlatform = (platform: string) => {
     setOtherPlatforms(prev => {
@@ -234,25 +222,11 @@ export function WaitlistRegistrationScreen({
     setError(null);
     setConnecting(true);
 
-    // Design-mode short-circuit: fabricate a proof so the wizard progresses
-    // without hitting a real X handshake.
+    // Design-mode short-circuit: fake a proof so the wizard progresses
+    // without a real X handshake.
     if (DESIGN_MODE) {
       try {
-        const fakeUsername = 'alexrivera';
-        const fakePayload = btoa(JSON.stringify({
-          tg_id: 0,
-          x_username: fakeUsername,
-          x_user_id: 'mock-x-id',
-          iat: Math.floor(Date.now() / 1000),
-        })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        const fakeProof = `${fakePayload}.mocktimestamp.mocksignature`;
-        try {
-          sessionStorage.setItem(PROOF_KEY, fakeProof);
-          sessionStorage.setItem(PROOF_IAT_KEY, String(Date.now()));
-        } catch { /* ignore */ }
-        setXProof(fakeProof);
-        setXUsername(fakeUsername);
-        setStep(2);
+        applyProof('mock.design.proof', 'alexrivera', 600);
         hapticFeedback('success');
       } finally {
         setConnecting(false);
@@ -269,39 +243,20 @@ export function WaitlistRegistrationScreen({
       setError(e?.message || 'Failed to start X verification');
       hapticFeedback('error');
       setWaitingForOAuth(false);
+      setAwaitingConfirm(false);
     } finally {
       setConnecting(false);
     }
   };
 
-  // Full reset back to step 1 when the proof is expired/invalid — clears the
-  // stored proof and asks the user to re-connect X.
-  const resetToConnectX = useCallback(() => {
-    try {
-      sessionStorage.removeItem(PROOF_KEY);
-      sessionStorage.removeItem(PROOF_IAT_KEY);
-    } catch { /* ignore */ }
-    setXProof(null);
-    setXUsername(null);
-    setWaitingForOAuth(false);
-    setStep(1);
-    setError('Your X session expired. Please connect X again.');
-    hapticFeedback('error');
-  }, []);
-
   const handleSubmit = async () => {
-    if (!xProof || !xUsername || !region || !niche) return;
+    if (!xProof || !region || !niche || loading) return;
 
-    // Belt-and-braces freshness re-check before hitting the network — the
-    // proof may have aged out while the user lingered on steps 2/3.
+    // the proof may have aged out while the user lingered on steps 2/3
     if (!DESIGN_MODE) {
-      let iat = NaN;
-      try {
-        const iatStr = sessionStorage.getItem(PROOF_IAT_KEY);
-        iat = iatStr ? Number(iatStr) : NaN;
-      } catch { /* sessionStorage unavailable — let the server decide */ }
-      if (Number.isFinite(iat) && Date.now() - iat >= PROOF_MAX_AGE_MS) {
-        resetToConnectX();
+      const exp = Number(readStored(PROOF_EXP_KEY));
+      if (Number.isFinite(exp) && exp > 0 && exp <= Date.now()) {
+        resetToConnectX('Your X session expired. Please connect X again.');
         return;
       }
     }
@@ -316,7 +271,7 @@ export function WaitlistRegistrationScreen({
       if (otherPlatforms.has('tiktok') && tiktokUsername.trim())
         platforms.push({ platform: 'tiktok', username: tiktokUsername.trim() });
       if (otherPlatforms.has('other') && otherPlatformUsername.trim())
-        platforms.push({ platform: 'other', username: otherPlatformUsername.trim(), platform_name: otherPlatformName.trim() });
+        platforms.push({ platform: 'other', username: otherPlatformUsername.trim(), platform_name: otherPlatformName.trim() || undefined });
 
       const result = await api.registerWaitlist({
         x_proof: xProof,
@@ -327,21 +282,21 @@ export function WaitlistRegistrationScreen({
       });
       if (result.status === 'registered' || result.status === 'already_registered') {
         hapticFeedback('success');
-        try {
-          sessionStorage.removeItem(PROOF_KEY);
-          sessionStorage.removeItem(PROOF_IAT_KEY);
-        } catch { /* ignore */ }
-        onSuccess({ x_username: xUsername, referral_code: result.referral_code });
+        forgetProof();
+        onSuccess({ x_username: result.x_username || xUsername || '', referral_code: result.referral_code });
       }
     } catch (err: any) {
       const msg: string = err?.message || 'Registration failed';
-      // Server rejected the proof (expired/invalid/wrong Telegram user) —
-      // bounce back to step 1 so the user can re-connect instead of being
-      // stuck 400-ing on step 3.
       if (/OAuth proof|different Telegram user/i.test(msg)) {
-        resetToConnectX();
+        // expired / invalid / someone else's proof — reconnect
+        resetToConnectX('Your X session expired. Please connect X again.');
+      } else if (/X username already (registered|in use)|X account already registered/i.test(msg)) {
+        resetToConnectX('That X account is already linked to another Telegram account. Connect a different X account.');
+      } else if (/^429/.test(msg)) {
+        setError('Too many attempts. Please wait a few minutes and try again.');
+        hapticFeedback('error');
       } else {
-        setError(msg);
+        setError(msg.replace(/^\d{3}: /, ''));
         hapticFeedback('error');
       }
     } finally {
@@ -416,6 +371,15 @@ export function WaitlistRegistrationScreen({
           <span>Connected as <span className="font-semibold">@{xUsername}</span></span>
         </div>
       )}
+      {step > 1 && !loading && (
+        <button
+          type="button"
+          onClick={() => resetToConnectX(null)}
+          className="text-xs text-gray-500 underline underline-offset-2 -mt-3 mb-4"
+        >
+          Use a different X account
+        </button>
+      )}
 
       {/* Form Card */}
       <div
@@ -437,9 +401,11 @@ export function WaitlistRegistrationScreen({
                 <div>
                   <div className="text-white font-medium text-sm">Verify with X</div>
                   <div className="text-gray-500 text-xs">
-                    {waitingForOAuth
-                      ? 'Waiting for X… complete authorization in the tab that opened.'
-                      : "We'll open X so you can approve Loudrr."}
+                    {awaitingConfirm
+                      ? 'Almost there — confirm the connection in the tab that opened.'
+                      : waitingForOAuth
+                        ? 'Waiting for X… complete authorization in the tab that opened.'
+                        : "We'll open X so you can approve Loudrr."}
                   </div>
                 </div>
               </div>
@@ -464,6 +430,11 @@ export function WaitlistRegistrationScreen({
                   <>
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                     Opening X…
+                  </>
+                ) : awaitingConfirm ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Confirm in your browser…
                   </>
                 ) : waitingForOAuth ? (
                   <>
@@ -607,6 +578,7 @@ export function WaitlistRegistrationScreen({
                   value={youtubeUsername}
                   onChange={(e) => setYoutubeUsername(e.target.value)}
                   placeholder="YouTube channel or @handle"
+                  maxLength={100}
                   className="w-full px-4 py-2.5 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500/30 text-sm mt-1"
                   style={{ ...inputStyle, borderColor: 'rgba(255, 0, 0, 0.2)' }}
                   disabled={loading}
@@ -627,6 +599,7 @@ export function WaitlistRegistrationScreen({
                   value={tiktokUsername}
                   onChange={(e) => setTiktokUsername(e.target.value)}
                   placeholder="TikTok @username"
+                  maxLength={100}
                   className="w-full px-4 py-2.5 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 text-sm mt-1"
                   style={{ ...inputStyle, borderColor: 'rgba(0, 242, 234, 0.2)' }}
                   disabled={loading}
@@ -647,6 +620,7 @@ export function WaitlistRegistrationScreen({
                   value={otherPlatformName}
                   onChange={(e) => setOtherPlatformName(e.target.value)}
                   placeholder="Platform name"
+                  maxLength={50}
                   className="w-full px-4 py-2.5 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500/30 text-sm mt-1"
                   style={{ ...inputStyle, borderColor: 'rgba(167, 139, 250, 0.2)' }}
                   disabled={loading}
@@ -656,6 +630,7 @@ export function WaitlistRegistrationScreen({
                   value={otherPlatformUsername}
                   onChange={(e) => setOtherPlatformUsername(e.target.value)}
                   placeholder="Username"
+                  maxLength={100}
                   className="w-full px-4 py-2.5 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500/30 text-sm mt-1.5"
                   style={{ ...inputStyle, borderColor: 'rgba(167, 139, 250, 0.2)' }}
                   disabled={loading}

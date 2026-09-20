@@ -23,7 +23,7 @@ export function HeroMetric({ label, value, delta, hint, icon: Icon }: HeroMetric
   let deltaNode: React.ReactNode = null;
   if (delta === null || delta === undefined) {
     deltaNode = (
-      <span className="inline-flex items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[11px] font-medium text-zinc-500">
+      <span className="inline-flex items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[11px] font-medium text-zinc-400">
         <Minus size={11} />
         no prior data
       </span>
@@ -62,7 +62,7 @@ export function HeroMetric({ label, value, delta, hint, icon: Icon }: HeroMetric
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-xs font-medium uppercase tracking-wider text-zinc-500">{label}</div>
+          <div className="text-xs font-medium uppercase tracking-wider text-zinc-400">{label}</div>
         </div>
         {Icon && (
           <div className="glass-icon glass-icon-orange glass-icon-md shrink-0">
@@ -78,7 +78,7 @@ export function HeroMetric({ label, value, delta, hint, icon: Icon }: HeroMetric
         {deltaNode}
       </div>
 
-      {hint && <div className="mt-2 text-xs text-zinc-500">{hint}</div>}
+      {hint && <div className="mt-2 text-xs text-zinc-400">{hint}</div>}
     </motion.div>
   );
 }

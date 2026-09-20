@@ -18,7 +18,9 @@ const VARIANTS: Record<Variant, string> = {
   secondary: 'bg-white/[0.06] text-white hover:bg-white/[0.10] active:bg-white/[0.14] border border-white/[0.08]',
   danger: 'bg-red-600 text-white hover:bg-red-500 active:bg-red-700',
   ghost: 'text-zinc-400 hover:text-white hover:bg-white/[0.04]',
-  success: 'bg-emerald-600 text-white hover:bg-emerald-500 active:bg-emerald-700',
+  // Black on emerald-600 is ~6.4:1; the old white-on-emerald-600 was ~3.3:1
+  // and failed AA for body text. Matches the primary button's black-on-colour.
+  success: 'bg-emerald-600 text-black font-semibold hover:bg-emerald-500 active:bg-emerald-700',
 };
 
 const SIZES: Record<Size, string> = {

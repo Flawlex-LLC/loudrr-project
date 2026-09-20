@@ -28,6 +28,17 @@ import { cn } from '@/lib/utils';
 
 // ---------- helpers ----------
 
+// share of all posts that ended without being fully engaged (expired or
+// cancelled) — the loudest health signal for a young feed
+function cancelShareNum(p: { active: number; completed: number; cancelled: number }): number {
+  const total = p.active + p.completed + p.cancelled;
+  return total ? (p.cancelled / total) * 100 : 0;
+}
+
+function cancelShare(p: { active: number; completed: number; cancelled: number }): string {
+  return `${cancelShareNum(p).toFixed(0)}% of all posts`;
+}
+
 function fmtInt(n: number | null | undefined): string {
   if (n === null || n === undefined) return '—';
   return n.toLocaleString();
@@ -92,33 +103,18 @@ function detailSummary(detail: Record<string, unknown>): string {
   }
 }
 
-// Same bands as backend/app/services/tier.py (hardcoded defaults — admin may have
-// retuned the thresholds via TIER_*_THRESHOLD SiteSettings, but the frontend has
-// no live access to those, so we use the source-of-truth defaults).
-const TIER_BANDS: Array<{ name: string; min: number; color: string }> = [
-  { name: 'GOAT', min: 1000, color: '#f95400' }, // brightest orange
-  { name: 'OG', min: 800, color: '#ff7a2e' },
-  { name: 'Legend', min: 600, color: '#ff945c' },
-  { name: 'Based', min: 400, color: '#ffae85' },
-  { name: 'Degen', min: 200, color: '#c66a2a' },
-  { name: 'Normie', min: 100, color: '#8a5a3c' },
-  { name: 'Anon', min: 0, color: '#3f3f46' }, // zinc-700 default
+// Tier names + donut colors, highest first. Membership comes from the `tier`
+// the backend computes per user (services/tier.py), so admin-retuned
+// TIER_*_THRESHOLD settings are respected — no thresholds duplicated here.
+const TIER_BANDS: Array<{ name: string; color: string }> = [
+  { name: 'GOAT', color: '#f95400' }, // brightest orange
+  { name: 'OG', color: '#ff7a2e' },
+  { name: 'Legend', color: '#ff945c' },
+  { name: 'Based', color: '#ffae85' },
+  { name: 'Degen', color: '#c66a2a' },
+  { name: 'Normie', color: '#8a5a3c' },
+  { name: 'Anon', color: '#3f3f46' }, // zinc-700 default
 ];
-
-function tierForScore(score: number | null | undefined): string {
-  const s = score ?? 0;
-  for (const b of TIER_BANDS) {
-    if (s >= b.min) return b.name;
-  }
-  return 'Anon';
-}
-
-// `searchUsers` returns a row shape that does NOT include tweetscout_score; in
-// practice the admin search endpoint exposes a slim view. We're widening here
-// to optimistically read the score if the backend starts including it — for now
-// every user falls into Anon if the score isn't present, which still gives a
-// readable donut driven by what the API actually returns.
-type UserWithScore = AdminUserRow & { tweetscout_score?: number | null };
 
 // Framer-motion row stagger — children appear 50ms apart in document order.
 const ROW_VARIANTS = {
@@ -150,23 +146,25 @@ export default function AdminDashboard() {
   // Initial parallel load — stats + 30d karma + 200 users + who am I.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
+    Promise.allSettled([
       adminApi.getStats(),
       adminApi.getTimeseries('karma_earned', 30),
       adminApi.searchUsers('', 200),
       adminApi.me(),
-    ])
-      .then(([s, k, u, me]) => {
-        if (cancelled) return;
-        setStats(s);
-        setKarmaSeries(k);
-        setUsers(u);
-        setGreetingName(me.telegram_username || (me.telegram_id ? `@${me.telegram_id}` : 'admin'));
-      })
-      .catch((e: Error) => {
-        if (cancelled) return;
-        setError(e.message);
-      });
+    ]).then(([s, k, u, me]) => {
+      if (cancelled) return;
+      // the stats call is the page; the rest degrade on their own
+      if (s.status === 'rejected') {
+        setError((s.reason as Error)?.message || 'Could not load stats');
+        return;
+      }
+      setStats(s.value);
+      if (k.status === 'fulfilled') setKarmaSeries(k.value);
+      setUsers(u.status === 'fulfilled' ? u.value : []);
+      if (me.status === 'fulfilled') {
+        setGreetingName(me.value.telegram_username || (me.value.telegram_id ? `@${me.value.telegram_id}` : 'admin'));
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -230,15 +228,15 @@ export default function AdminDashboard() {
     return m;
   }, [users]);
 
-  // Compute tier distribution from the users list. Each user is placed in the
-  // first band whose threshold their tweetscout_score meets. Bands with 0 users
-  // are still included so colors stay stable across loads.
+  // Tier distribution over the loaded users (the 200 most recent), bucketed by
+  // the tier the backend assigned. Bands with 0 users are still included so
+  // colors stay stable across loads.
   const tierData = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const b of TIER_BANDS) counts[b.name] = 0;
     if (users) {
-      for (const u of users as UserWithScore[]) {
-        const t = tierForScore(u.tweetscout_score ?? 0);
+      for (const u of users) {
+        const t = u.tier in counts ? u.tier : 'Anon';
         counts[t] = (counts[t] ?? 0) + 1;
       }
     }
@@ -261,7 +259,7 @@ export default function AdminDashboard() {
         title="Couldn't load dashboard"
         description={
           error.startsWith('403')
-            ? "You're authenticated but lack admin role. Bootstrap via backend/scripts/seed_admins.py (sets ADMIN_TELEGRAM_IDS to superadmin)."
+            ? "This Telegram account isn't an admin. Ask a superadmin to give you access."
             : error
         }
       />
@@ -397,9 +395,10 @@ export default function AdminDashboard() {
               icon={ShieldCheck}
             />
             <QueueRow
-              label="Pending batches"
+              label="Pending claims"
               value={loading ? '—' : fmtInt(q?.pending_batches)}
               tone={q && q.pending_batches > 0 ? 'warning' : 'default'}
+              href="/admin/ops?tab=claims"
               icon={Layers}
             />
           </div>
@@ -427,7 +426,7 @@ export default function AdminDashboard() {
                 Tier distribution
               </div>
               <div className="mt-1 text-[11px] text-zinc-600">
-                Derived from TweetScout score bands
+                200 most recent users, by score tier
               </div>
             </div>
           </div>
@@ -504,8 +503,40 @@ export default function AdminDashboard() {
       {/* ============================================================
           ROW 4 — Recent activity (8) + Queues compact (4)
           ============================================================ */}
+      {/* Karma economy + post health: fetched with the stats all along, never shown.
+          In circulation far above earned means karma is being minted (grants,
+          sponsors); a high cancellation share means posts expire unfunded. */}
       <motion.section
         custom={5}
+        initial="hidden"
+        animate="visible"
+        variants={ROW_VARIANTS}
+        className="col-span-12"
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d0d] p-4">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wider text-zinc-400">Karma economy</div>
+            <MetricRow label="In circulation" value={loading ? '—' : fmtKarma(c?.in_circulation)} />
+            <MetricRow label="Earned by users (all time)" value={loading ? '—' : fmtKarma(c?.total_earned)} />
+            <MetricRow label="Spent on posts (net of refunds)" value={loading ? '—' : fmtKarma(c?.total_spent)} />
+            <MetricRow label="Locked in live post escrow" value={loading ? '—' : fmtKarma(p?.total_escrow_active)} />
+          </div>
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d0d] p-4">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wider text-zinc-400">Posts</div>
+            <MetricRow label="Live" value={loading ? '—' : fmtInt(p?.active)} />
+            <MetricRow label="Completed (fully engaged)" value={loading ? '—' : fmtInt(p?.completed)} tone="success" />
+            <MetricRow
+              label="Expired or cancelled"
+              value={loading || !p ? '—' : `${fmtInt(p.cancelled)} (${cancelShare(p)})`}
+              tone={p && cancelShareNum(p) > 50 ? 'warning' : 'default'}
+            />
+            <MetricRow label="Engagements this week" value={loading ? '—' : fmtInt(e?.this_week)} />
+          </div>
+        </div>
+      </motion.section>
+
+      <motion.section
+        custom={6}
         initial="hidden"
         animate="visible"
         variants={ROW_VARIANTS}
@@ -587,7 +618,7 @@ export default function AdminDashboard() {
       </motion.section>
 
       <motion.section
-        custom={6}
+        custom={7}
         initial="hidden"
         animate="visible"
         variants={ROW_VARIANTS}
@@ -609,8 +640,9 @@ export default function AdminDashboard() {
             tone={q && q.pending_x_verifications > 0 ? 'warning' : 'default'}
           />
           <QueueCard
-            label="Batches"
+            label="Claims"
             value={loading ? '—' : fmtInt(q?.pending_batches)}
+            href="/admin/ops?tab=claims"
             icon={Layers}
             tone={q && q.pending_batches > 0 ? 'warning' : 'default'}
           />
@@ -621,7 +653,7 @@ export default function AdminDashboard() {
           ROW 5 — Users overview (full width, horizontal strip)
           ============================================================ */}
       <motion.section
-        custom={7}
+        custom={8}
         initial="hidden"
         animate="visible"
         variants={ROW_VARIANTS}
@@ -688,6 +720,16 @@ function DeltaPill({ delta }: { delta: number | null }) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[11px] font-medium text-zinc-500">
         no prior data
+      </span>
+    );
+  }
+  if (delta > 999) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full border border-emerald-900/50 bg-emerald-950/40 px-2 py-0.5 text-[11px] font-semibold text-emerald-300"
+        title={`+${delta.toFixed(0)}% — the previous period had almost nothing to compare against`}
+      >
+        new
       </span>
     );
   }

@@ -19,11 +19,11 @@ interface DonutChartProps {
 
 const DEFAULT_PALETTE = [
   '#f95400', // orange
-  '#3f3f46', // zinc-700
-  '#ff8c42', // light orange
   '#52525b', // zinc-600
-  '#cc5500', // deep orange
+  '#ff8c42', // light orange
   '#71717a', // zinc-500
+  '#cc5500', // deep orange
+  '#a1a1aa', // zinc-400
 ];
 
 export function DonutChart({ data, total, label, height = 200 }: DonutChartProps) {
@@ -85,7 +85,7 @@ export function DonutChart({ data, total, label, height = 200 }: DonutChartProps
         <div className="stat-glow text-2xl font-bold leading-none tabular-nums text-white">
           {total.toLocaleString()}
         </div>
-        <div className="mt-1 text-[10px] uppercase tracking-wider text-zinc-500">{label}</div>
+        <div className="mt-1 text-[10px] uppercase tracking-wider text-zinc-400">{label}</div>
       </div>
     </div>
   );

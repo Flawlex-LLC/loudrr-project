@@ -9,6 +9,10 @@ const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || "http://localhost:8000";
 const nextConfig: NextConfig = {
   output: 'standalone', // Required for Docker deployment
   reactCompiler: true,
+  experimental: {
+    // Rewrite-proxy timeout (Next's default is 30s); admin sponsor writes can make two gateway calls
+    proxyTimeout: 60_000,
+  },
   // Allow external images for avatars
   images: {
     remotePatterns: [

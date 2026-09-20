@@ -30,6 +30,20 @@ function isInTelegram(): boolean {
   return typeof window !== 'undefined' && !!(window as any).Telegram?.WebApp?.initData;
 }
 
+// FastAPI errors: {"detail": "text"}, or a 422's {"detail": [{msg, loc}, …]};
+// the app's own errors use {"error": "text"}. Never "[object Object]".
+function errorMessage(body: any, fallback: string): string {
+  const detail = body?.detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail.map((d) => (typeof d?.msg === 'string' ? d.msg : '')).filter(Boolean);
+    if (msgs.length) return msgs.join('; ');
+  }
+  for (const v of [detail, body?.error, body?.message]) {
+    if (typeof v === 'string' && v) return v;
+  }
+  return fallback || 'Request failed';
+}
+
 // API request helper
 async function apiRequest<T>(
   endpoint: string,
@@ -74,8 +88,7 @@ async function apiRequest<T>(
     // FastAPI returns {"detail": "..."} on errors — check that first.
     // Also include the HTTP status code so future debugging isn't blind.
     const body = await response.json().catch(() => ({}));
-    const msg = body.detail || body.error || body.message || response.statusText || 'Request failed';
-    throw new Error(`${response.status}: ${msg}`);
+    throw new Error(`${response.status}: ${errorMessage(body, response.statusText)}`);
   }
 
   return response.json();
@@ -123,8 +136,7 @@ async function loudApiRequest<T>(
     // FastAPI returns {"detail": "..."} on errors — check that first.
     // Also include the HTTP status code so future debugging isn't blind.
     const body = await response.json().catch(() => ({}));
-    const msg = body.detail || body.error || body.message || response.statusText || 'Request failed';
-    throw new Error(`${response.status}: ${msg}`);
+    throw new Error(`${response.status}: ${errorMessage(body, response.statusText)}`);
   }
 
   return response.json();
@@ -251,10 +263,13 @@ export interface SubmitPostResponse {
 export interface AppSettings {
   post_cost_min: number;
   post_cost_max: number;
+  // Claim threshold (MIN_ENGAGEMENTS_TO_CLAIM) — admin-tunable, mirrored in the
+  // Engage tab so the button never disagrees with the backend gate.
+  min_engagements_to_claim?: number;
   // Live tier bands (highest threshold first) — admins can retune these at
   // runtime, so surfaces that label a score should read them from here rather
   // than hardcoding a copy. See app/waitlist/[username]/page.tsx.
-  tiers?: { name: string; min_score: number }[];
+  tiers?: { name: string; min_score: number; multiplier?: number }[];
 }
 
 export interface QueueClaimResponse {
@@ -333,7 +348,17 @@ export interface WaitlistEnrichment {
   score: number | null;
   tier: string | null;
   followers: string[];
-  followers_count: number;
+  followers_count: number;         // total smart followers (>= followers.length)
+  // 'pending' = the sign-up score fetch hasn't landed yet (poll briefly);
+  // 'not_found' = fetched, but there's no score for this account yet
+  score_status: 'pending' | 'ready' | 'not_found';
+  score_updated_at: string | null;
+}
+
+// POST /user/refresh-score/ — the card fields plus what happened
+export interface ScoreRefreshResult extends WaitlistEnrichment {
+  result: 'updated' | 'not_found' | 'cooldown' | 'unavailable';
+  retry_after_seconds: number;     // > 0 with 'cooldown'
 }
 
 // API Functions
@@ -492,10 +517,11 @@ export const api = {
    */
   checkWaitlistStatus: () =>
     apiRequest<{
-      status: 'approved' | 'waitlisted' | 'not_registered';
+      status: 'approved' | 'waitlisted' | 'rejected' | 'not_registered';
       x_username?: string;
       submitted_at?: string;
       referral_code?: string;
+      reason?: string;  // rejected only
     }>('/waitlist/status/'),
 
   /**
@@ -508,6 +534,14 @@ export const api = {
     apiRequest<WaitlistEnrichment>('/user/waitlist-enrichment/'),
 
   /**
+   * Re-fetch the caller's score now (applicants and approved users). Scores
+   * are only ever fetched at sign-up and by this call — there's no scheduler —
+   * and the backend allows one refresh per account per cooldown window.
+   */
+  refreshScore: () =>
+    apiRequest<ScoreRefreshResult>('/user/refresh-score/', { method: 'POST' }),
+
+  /**
    * Kick off the waitlist-specific X OAuth flow. The backend creates a
    * pre-signup state row (keyed on the caller's telegram_id, not a User) and
    * returns the X authorize URL. Frontend opens it via Telegram WebApp
@@ -518,13 +552,43 @@ export const api = {
     apiRequest<{ authorize_url: string }>('/waitlist/x-oauth/start/', { method: 'POST' }),
 
   /**
-   * Poll for a server-stored OAuth proof (Telegram WebView flow). When the
-   * OAuth chain completes in the external system browser, sessionStorage
-   * there is invisible to the mini-app WebView — so the backend stores the
-   * minted proof keyed by telegram_id and we poll for it here. Single-use:
-   * the backend deletes the row on read.
+   * Poll for the outcome of the X OAuth attempt (Telegram WebView flow). The
+   * OAuth chain completes in the external system browser, whose storage the
+   * mini-app WebView can't see — so the backend stores the outcome keyed by
+   * telegram_id. All null while X is still open; then either the proof (with
+   * the verified handle — never decode the token client-side, it's
+   * compressed) or an error code (reported once). The proof stays readable
+   * until registration.
    */
-  pollWaitlistXOAuthProof: () => apiRequest<{ proof: string | null }>('/waitlist/x-oauth/proof/'),
+  pollWaitlistXOAuthProof: () =>
+    apiRequest<{
+      proof: string | null;
+      x_username: string | null;
+      expires_in: number | null;   // seconds left on the proof
+      error: 'denied' | 'invalid' | 'expired' | 'token' | 'profile' | 'cancelled' | null;
+      // true once someone authorized on X but nobody has confirmed the link in
+      // the browser yet — the handle stays hidden until they do
+      awaiting_confirmation?: boolean;
+    }>('/waitlist/x-oauth/proof/'),
+
+  /**
+   * What the browser that just authorized on X is about to link. Public: this
+   * tab has no Telegram session, so the one-time token from the callback is the
+   * only credential — and it travels in the BODY, so it never reaches a request
+   * log, a Referer header or browser history.
+   */
+  getWaitlistXOAuthConfirmation: (token: string) =>
+    apiRequest<{ x_username: string; telegram_label: string; expires_in: number }>(
+      '/waitlist/x-oauth/confirm/info/',
+      { method: 'POST', body: JSON.stringify({ token }) },
+    ),
+
+  /** The answer. `confirm` releases the proof to that Telegram account's mini-app. */
+  decideWaitlistXOAuthConfirmation: (token: string, decision: 'confirm' | 'cancel') =>
+    apiRequest<{ ok: boolean; status: 'confirmed' | 'cancelled' }>(
+      '/waitlist/x-oauth/confirm/',
+      { method: 'POST', body: JSON.stringify({ token, decision }) },
+    ),
 
   /**
    * Register for waitlist directly from the mini-app. Telegram-only signup —
@@ -544,6 +608,7 @@ export const api = {
     apiRequest<{
       status: 'registered' | 'already_registered';
       message: string;
+      x_username: string;   // the entry's verified handle
       referral_code?: string;
     }>('/waitlist/register/', {
       method: 'POST',
@@ -690,10 +755,9 @@ async function adminApiRequest<T>(
   const response = await fetch(url, { ...options, headers });
 
   if (!response.ok) {
-    // Surface FastAPI's standard {"detail": "..."} shape, with status code
+    // Surface FastAPI's {"detail": ...} shape (422 arrays included), with status code
     const body = await response.json().catch(() => ({}));
-    const msg = body.detail || body.error || body.message || response.statusText;
-    throw new Error(`${response.status}: ${msg}`);
+    throw new Error(`${response.status}: ${errorMessage(body, response.statusText)}`);
   }
   return response.json();
 }
@@ -709,6 +773,12 @@ export interface PendingWaitlistEntry {
   region: string;
   niche: string;
   created_at: string | null;
+  // stored at sign-up (or the applicant's last refresh); score null +
+  // score_updated_at null = not fetched yet
+  score: number | null;
+  tier: string | null;
+  smart_followers: number | null;
+  score_updated_at: string | null;
 }
 
 export interface PendingXVerification {
@@ -720,16 +790,326 @@ export interface PendingXVerification {
   created_at: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// The two review queues (GET /api/admin/waitlist/ and /x-verification/).
+//
+// These replace the old `/pending/` reads, which returned a bare array of the
+// first 200 `submitted` rows: no total, no paging, no history, and a third of
+// the columns the reviewer actually decides on left in the database.
+//
+// Every timestamp below is a NAIVE UTC ISO string with no `Z` — render it
+// through lib/admin/format.ts, never `new Date(iso)`.
+// ---------------------------------------------------------------------------
+
+/** `{items, total, limit, offset}` — `total` counts every match, pre-paging. */
+export interface AdminPage<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export type WaitlistReviewStatus = 'submitted' | 'approved' | 'rejected';
+
+export interface WaitlistReviewRow {
+  id: string;
+  status: WaitlistReviewStatus;
+
+  // identity — telegram_username is "" for a good number of rows; fall back to
+  // telegram_display_name, then the numeric id, before rendering a dash
+  telegram_id: number | null;
+  telegram_username: string;
+  telegram_display_name: string;
+  x_username: string;
+  x_user_id: string;
+  x_link: string;
+  x_verified: boolean;
+  x_verified_previously: boolean;
+
+  // signal. score === null && score_updated_at === null  -> never fetched
+  //         score === null && score_updated_at !== null  -> provider had none
+  score: number | null;
+  tier: string | null;
+  score_updated_at: string | null;
+  followers_count: number | null;
+  following_count: number | null;
+  tweets_count: number | null;
+  smart_followers: number | null;
+  register_date: string | null;   // "2012-07-25" — account age
+  bio: string;
+  profile_name: string;
+  avatar: string;
+  x_blue_verified: boolean;
+  category: string;
+
+  // profile
+  region: string;                 // raw enum value, e.g. "cis_eastern_europe"
+  niche: string;                  // raw enum value, e.g. "ai_tech"
+  other_platforms: Array<{ platform?: string; username?: string; platform_name?: string | null }>;
+
+  // referral
+  referral_code: string;
+  referral_code_used: string;
+  referrer_handle: string;
+  /** Total applications that came in on `referral_code_used` — a ring tell. */
+  referral_code_uses: number;
+  total_referrals: number;
+
+  // decision bookkeeping (populated on the approved / rejected tabs)
+  rejection_reason: string;
+  decided_at: string | null;
+  decided_by_handle: string;
+  created_user_id: string | null;
+  created_at: string | null;
+}
+
+export interface WaitlistQuery {
+  q?: string;
+  status?: WaitlistReviewStatus | '';
+  sort?: 'created' | 'score' | 'tier';
+  dir?: 'asc' | 'desc';
+  region?: string;
+  niche?: string;
+  hasScore?: boolean | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface WaitlistFacets {
+  regions: string[];
+  niches: string[];
+  statuses: WaitlistReviewStatus[];
+}
+
+export interface RefreshScoreResult {
+  ok: boolean;
+  /** true = handed to arq, the row updates in the background. */
+  queued: boolean;
+  /** Inline outcome when there's no queue: found | not_found | unavailable | skipped. */
+  result: 'found' | 'not_found' | 'unavailable' | 'skipped' | null;
+  entry: WaitlistReviewRow;
+}
+
+export type XVerificationReviewStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export interface XVerificationPriorRequest {
+  id: string;
+  submitted_x_username: string;
+  claimed_x_username: string;
+  claimed_x_user_id: string;
+  status: XVerificationReviewStatus;
+  /** Reviewer-to-reviewer note. Never sent to the user. */
+  admin_notes: string;
+  created_at: string | null;
+  reviewed_at: string | null;
+}
+
+export interface XVerificationReviewRow extends XVerificationPriorRequest {
+  user_id: string;
+  user_telegram_id: number | null;
+  user_telegram_username: string;
+  user_display_name: string;
+  /** The handle the account holds today — not necessarily either of the two. */
+  user_x_username: string;
+  user_score: number | null;
+  user_tier: string | null;
+  user_credits: number;
+  user_is_banned: boolean;
+  user_x_verified: boolean;
+  user_created_at: string | null;
+  /** The same user's other requests, newest first. */
+  prior_requests: XVerificationPriorRequest[];
+  /** Non-null => approve will 409. Disable Approve and say why. */
+  claimed_handle_taken_by: {
+    user_id: string;
+    telegram_username: string;
+    x_username: string;
+    is_banned: boolean;
+  } | null;
+}
+
+export interface XVerificationQuery {
+  q?: string;
+  status?: XVerificationReviewStatus | '';
+  limit?: number;
+  offset?: number;
+}
+
+function queryString(params: Record<string, string | number | boolean | null | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    // "" and null mean "no filter" — don't send them, so the backend's own
+    // defaults (status=submitted, sort=created) stay in one place
+    if (value === undefined || value === null || value === '') continue;
+    search.set(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `?${qs}` : '';
+}
+
 export interface AdminUserRow {
   id: string;
   telegram_id: number | null;
   telegram_username: string;
   x_username: string;
+  display_name: string;              // identity fallback when there is no handle
   credits: number;
   role: '' | 'admin' | 'superadmin';
   is_banned: boolean;
   is_whitelisted: boolean;
   x_verified: boolean;
+  total_engagements: number;
+  created_at: string | null;         // NAIVE UTC — render through lib/admin/format
+  tweetscout_score: number;          // score from the score provider (0 if never scored)
+  tier: string;                      // tier that score maps to (karma multiplier)
+  score_updated_at: string | null;   // last refresh attempt, ISO; null = never scored
+}
+
+/** Sort keys the users endpoint accepts. Anything else is a 422. */
+export type AdminUserSort = 'created_at' | 'credits' | 'tweetscout_score' | 'total_engagements';
+/** Server-side row filters. '' means no filter. */
+export type AdminUserFlag = '' | 'banned' | 'not_whitelisted' | 'admins' | 'never_scored';
+
+export interface AdminUserQuery {
+  q?: string;
+  flag?: AdminUserFlag;
+  sort?: AdminUserSort;
+  dir?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * `{rows, total}` — the envelope the users endpoints answer with. (The review
+ * queues above use `AdminPage`/`items`; these are the user-side lists.)
+ */
+export interface AdminRowsPage<T> {
+  rows: T[];
+  total: number;
+}
+
+export interface AdminUsersPage extends AdminRowsPage<AdminUserRow> {
+  limit: number;
+  offset: number;
+}
+
+export interface AdminUserDetail {
+  id: string;
+  telegram_id: number | null;
+  telegram_username: string;
+  x_username: string;
+  display_name: string;
+  referral_code: string;
+  created_at: string | null;
+  is_platform_account: boolean;
+  flags: {
+    role: '' | 'admin' | 'superadmin';
+    is_banned: boolean;
+    is_whitelisted: boolean;
+    x_verified: boolean;
+    x_verified_at: string | null;
+    loud_access: boolean;
+    pending_x_verification: boolean;
+    pending_claimed_x_username: string;
+  };
+  score: {
+    tweetscout_score: number;
+    tier: string;
+    multiplier: number;
+    score_updated_at: string | null;
+  };
+  credits: {
+    balance: number;
+    total_earned: number;
+    total_spent: number;
+    /** min(balance, earned - spent) — karma above this cannot actually be spent. */
+    spendable_headroom: number;
+    daily_earned: number;
+    daily_reset_at: string | null;
+    escrow_locked: number;
+  };
+  xp: {
+    sponsored_xp: number;
+    total_sponsored_xp_earned: number;
+    sponsored_engagements: number;
+  };
+  activity: {
+    total_engagements: number;
+    total_posts: number;
+    engagements_recorded: number;
+    engagements_pending: number;
+    posts_active: number;
+    posts_completed: number;
+    posts_cancelled: number;
+    current_streak: number;
+    longest_streak: number;
+    last_engagement_date: string | null;
+    honesty_score: number;
+  };
+  waitlist: {
+    id: string;
+    status: string;
+    x_username: string;
+    x_verified: boolean;
+    region: string;
+    niche: string;
+    score: number | null;
+    created_at: string | null;
+    approved_at: string | null;
+    rejection_reason: string;
+  } | null;
+  referrals: {
+    code: string;
+    referred_by_code: string;
+    referrals_made: number;
+  };
+}
+
+export interface AdminUserTransaction {
+  id: string;
+  type: 'earned' | 'spent' | 'refund' | 'admin_grant' | 'apply_penalty';
+  amount: number;
+  balance_after: number;
+  description: string;
+  reference_id: string | null;
+  reference_type: string;
+  created_at: string | null;
+}
+
+export interface AdminUserPost {
+  id: string;
+  x_link: string;
+  tweet_text: string;
+  status: string;
+  is_sponsored: boolean;
+  escrow: number;
+  initial_escrow: number;
+  engagements: number;
+  created_at: string | null;
+  completed_at: string | null;
+}
+
+export interface AdminUserEngagement {
+  id: string;
+  post_id: string;
+  post_link: string;
+  post_author: string;
+  is_sponsored: boolean;
+  verified: boolean;
+  credit_granted: boolean;
+  like_verified: boolean;
+  reply_verified: boolean;
+  clicked_at: string | null;
+}
+
+export interface AdminUserAuditRow {
+  id: string;
+  action: string;
+  detail: Record<string, unknown>;
+  actor_id: string | null;
+  actor_handle: string;
+  actor_role: string;
+  created_at: string | null;
 }
 
 export interface SiteSettingRow {
@@ -740,6 +1120,15 @@ export interface SiteSettingRow {
   description: string;
   live: boolean;       // true if backend code currently reads this
   persisted: boolean;  // false means: no SiteSetting row yet, default shown
+  // Bounds the SERVER enforces; mirrored onto the input so the two can't drift.
+  // null on non-numeric settings.
+  min: number | null;
+  max: number | null;
+  step: number | null;
+  unit: string;        // short suffix shown beside the field ('karma', 'seconds')
+  danger: boolean;     // money/availability critical → confirm before saving
+  impact: string;      // one-line "what this actually does" for that confirm
+  drifted: boolean;    // current value differs from the shipped default
 }
 
 export interface SiteSettingsGroup {
@@ -750,6 +1139,17 @@ export interface SiteSettingsGroup {
 
 export interface SiteSettingsResponse {
   groups: SiteSettingsGroup[];
+  /** How long another PROCESS (the arq settlement worker) may keep a stale copy. */
+  propagation_seconds: number;
+}
+
+export interface SiteSettingHistoryRow {
+  id: string;
+  old_value: string | null;
+  new_value: string | null;
+  actor_id: string | null;
+  actor_handle: string;
+  created_at: string | null;
 }
 
 export interface AdminStats {
@@ -803,38 +1203,146 @@ export interface TimeseriesResponse {
   delta_pct: number | null;
 }
 
+// An X account whose new original posts (not replies/retweets) become
+// sponsored raid posts. Timestamps are naive UTC ISO strings (no zone suffix).
+export interface SponsorRow {
+  id: string;
+  x_username: string;           // lowercase, no "@"
+  x_user_id: string;
+  display_name: string;
+  avatar_url: string;
+  is_active: boolean;
+  karma_per_post: number;       // escrow each new sponsored post is funded with
+  notes: string;
+  posts_created: number;        // sponsored posts ever created from this account
+  active_posts: number;         // of those, still live in Engage
+  posts_total: number;
+  karma_paid: number;           // karma engagers have earned from its posts
+  engagements: number;
+  last_post_at: string | null;
+  last_tweet_id: string | null;
+  active_since: string | null;
+  created_at: string | null;
+}
+
+export type SponsorPatch = Partial<Pick<SponsorRow, 'is_active' | 'karma_per_post' | 'notes'>>;
+
 export const adminApi = {
   // ---- read ----
   pendingWaitlist: (limit = 50) =>
     adminApiRequest<PendingWaitlistEntry[]>(`/waitlist/pending/?limit=${limit}`),
   pendingXVerifications: (limit = 50) =>
     adminApiRequest<PendingXVerification[]>(`/x-verification/pending/?limit=${limit}`),
+  /**
+   * Paged + filtered user list. `q` matches telegram/x handle, display name,
+   * referral code, telegram id and uuid prefix (server-side, LIKE-escaped).
+   */
+  listUsers: (query: AdminUserQuery = {}) => {
+    const p = new URLSearchParams();
+    if (query.q) p.set('q', query.q);
+    if (query.flag) p.set('flag', query.flag);
+    p.set('sort', query.sort ?? 'created_at');
+    p.set('dir', query.dir ?? 'desc');
+    p.set('limit', String(query.limit ?? 25));
+    p.set('offset', String(query.offset ?? 0));
+    return adminApiRequest<AdminUsersPage>(`/users/?${p.toString()}`);
+  },
+  /** Rows only — for callers (the dashboard tier donut) that just want a sample. */
   searchUsers: (q = '', limit = 50) =>
-    adminApiRequest<AdminUserRow[]>(
+    adminApiRequest<AdminUsersPage>(
       `/users/?q=${encodeURIComponent(q)}&limit=${limit}`
+    ).then((page) => page.rows),
+
+  // ---- user detail (drill-down) ----
+  getUser: (userId: string) => adminApiRequest<AdminUserDetail>(`/users/${userId}/`),
+  getUserTransactions: (userId: string, limit = 25, offset = 0) =>
+    adminApiRequest<AdminRowsPage<AdminUserTransaction>>(
+      `/users/${userId}/transactions/?limit=${limit}&offset=${offset}`
+    ),
+  getUserPosts: (userId: string, limit = 25, offset = 0) =>
+    adminApiRequest<AdminRowsPage<AdminUserPost>>(
+      `/users/${userId}/posts/?limit=${limit}&offset=${offset}`
+    ),
+  getUserEngagements: (userId: string, limit = 25, offset = 0) =>
+    adminApiRequest<AdminRowsPage<AdminUserEngagement>>(
+      `/users/${userId}/engagements/?limit=${limit}&offset=${offset}`
+    ),
+  getUserAudit: (userId: string, limit = 25, offset = 0) =>
+    adminApiRequest<AdminRowsPage<AdminUserAuditRow>>(
+      `/users/${userId}/audit/?limit=${limit}&offset=${offset}`
     ),
 
   // ---- user ops ----
-  grantCredits: (userId: string, amount: number, description = '') =>
-    adminApiRequest<{ ok: boolean; user_id: string; credits: number }>(
+  /**
+   * `granted` is what actually landed — 0 with `duplicate: true` when the same
+   * `requestId` was already used (double-click / retried fetch).
+   */
+  grantCredits: (userId: string, amount: number, description = '', requestId = '') =>
+    adminApiRequest<{
+      ok: boolean; user_id: string; credits: number;
+      requested: number; granted: number; duplicate: boolean;
+    }>(
       `/users/${userId}/grant-credits/`,
-      { method: 'POST', body: JSON.stringify({ amount: String(amount), description }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          amount: String(amount), description, request_id: requestId,
+        }),
+      }
     ),
-  revokeCredits: (userId: string, amount: number, reason = '') =>
-    adminApiRequest<{ ok: boolean; user_id: string; credits: number }>(
+  /**
+   * `deducted` is what actually left the balance — apply_penalty clamps to the
+   * balance, so a 400 revoke against 355.35 removes 355.35 (`clamped: true`).
+   * Toast THAT number, never the requested one.
+   */
+  revokeCredits: (userId: string, amount: number, reason = '', requestId = '') =>
+    adminApiRequest<{
+      ok: boolean; user_id: string; credits: number;
+      requested: number; deducted: number; clamped: boolean; duplicate: boolean;
+    }>(
       `/users/${userId}/revoke-credits/`,
-      { method: 'POST', body: JSON.stringify({ amount: String(amount), reason }) }
+      {
+        method: 'POST',
+        body: JSON.stringify({ amount: String(amount), reason, request_id: requestId }),
+      }
     ),
   banUser: (userId: string, reason = '') =>
-    adminApiRequest<{ ok: boolean; user_id: string; is_banned: boolean }>(
+    adminApiRequest<{
+      ok: boolean; user_id: string; is_banned: boolean; is_whitelisted: boolean;
+    }>(
       `/users/${userId}/ban/`,
       { method: 'POST', body: JSON.stringify({ reason }) }
     ),
+  /** Also restores the whitelist flag the ban cleared, when one was recorded. */
   unbanUser: (userId: string) =>
-    adminApiRequest<{ ok: boolean; user_id: string; is_banned: boolean }>(
+    adminApiRequest<{
+      ok: boolean; user_id: string; is_banned: boolean; is_whitelisted: boolean;
+    }>(
       `/users/${userId}/unban/`,
       { method: 'POST', body: JSON.stringify({}) }
     ),
+  setWhitelist: (userId: string, value: boolean) =>
+    adminApiRequest<{ ok: boolean; user_id: string; is_whitelisted: boolean }>(
+      `/users/${userId}/whitelist/`,
+      { method: 'POST', body: JSON.stringify({ value }) }
+    ),
+
+  // ---- waitlist review queue ----
+  listWaitlist: (query: WaitlistQuery = {}) =>
+    adminApiRequest<AdminPage<WaitlistReviewRow>>(
+      `/waitlist/${queryString({
+        q: query.q,
+        status: query.status,
+        sort: query.sort,
+        dir: query.dir,
+        region: query.region,
+        niche: query.niche,
+        has_score: query.hasScore ?? null,
+        limit: query.limit,
+        offset: query.offset,
+      })}`
+    ),
+  waitlistFacets: () => adminApiRequest<WaitlistFacets>(`/waitlist/facets/`),
 
   // ---- waitlist ops ----
   approveWaitlist: (entryId: string) =>
@@ -842,10 +1350,38 @@ export const adminApi = {
       `/waitlist/${entryId}/approve/`,
       { method: 'POST', body: JSON.stringify({}) }
     ),
-  rejectWaitlist: (entryId: string, reason = '') =>
+  /**
+   * `reason` is DM'd to the applicant verbatim; `internalNote` only ever
+   * reaches audit_logs. They are NOT interchangeable — the single field this
+   * replaced was labelled "internal" in the UI and mailed out anyway.
+   */
+  rejectWaitlist: (entryId: string, reason = '', internalNote = '') =>
     adminApiRequest<{ ok: boolean; entry_id: string; status: string }>(
       `/waitlist/${entryId}/reject/`,
-      { method: 'POST', body: JSON.stringify({ reason }) }
+      { method: 'POST', body: JSON.stringify({ reason, internal_note: internalNote }) }
+    ),
+  /** Undo a rejection. 409 unless the entry is `rejected` and userless. */
+  reopenWaitlist: (entryId: string, internalNote = '') =>
+    adminApiRequest<{ ok: boolean; entry_id: string; status: string }>(
+      `/waitlist/${entryId}/reopen/`,
+      { method: 'POST', body: JSON.stringify({ internal_note: internalNote }) }
+    ),
+  /** Re-run the score fetch for one applicant (queued, or inline in dev). */
+  refreshWaitlistScore: (entryId: string) =>
+    adminApiRequest<RefreshScoreResult>(
+      `/waitlist/${entryId}/refresh-score/`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
+
+  // ---- x-verification review queue ----
+  listXVerifications: (query: XVerificationQuery = {}) =>
+    adminApiRequest<AdminPage<XVerificationReviewRow>>(
+      `/x-verification/${queryString({
+        q: query.q,
+        status: query.status,
+        limit: query.limit,
+        offset: query.offset,
+      })}`
     ),
 
   // ---- x-verification ops ----
@@ -854,10 +1390,11 @@ export const adminApi = {
       `/x-verification/${requestId}/approve/`,
       { method: 'POST', body: JSON.stringify({}) }
     ),
-  rejectXVerification: (requestId: string, notes = '') =>
+  /** Same split as rejectWaitlist: `reason` is sent, `internalNote` is not. */
+  rejectXVerification: (requestId: string, reason = '', internalNote = '') =>
     adminApiRequest<{ ok: boolean; request_id: string; status: string }>(
       `/x-verification/${requestId}/reject/`,
-      { method: 'POST', body: JSON.stringify({ notes }) }
+      { method: 'POST', body: JSON.stringify({ reason, internal_note: internalNote }) }
     ),
 
   me: () =>
@@ -870,17 +1407,112 @@ export const adminApi = {
 
   getStats: () => adminApiRequest<AdminStats>(`/stats/`),
 
+  /**
+   * Exact moderation backlog counts for the sidebar badges.
+   *
+   * Reads the `queues` block of the existing GET /api/admin/stats/ (single
+   * COUNT per queue) instead of measuring `pendingWaitlist(limit).length`,
+   * which saturates at the list limit — a 200-deep waitlist used to render
+   * as "50".
+   */
+  queues: () => adminApiRequest<AdminStats>(`/stats/`).then((s) => s.queues),
+
   getTimeseries: (metric: TimeseriesMetric, days = 30) =>
     adminApiRequest<TimeseriesResponse>(`/stats/timeseries?metric=${metric}&days=${days}`),
 
   getSiteSettings: () => adminApiRequest<SiteSettingsResponse>(`/site-settings/`),
 
+  // trailing slash on purpose: the slashless form 307-redirects the browser to
+  // the backend's INTERNAL origin in prod, and the save silently fails
   updateSiteSetting: (key: string, value: string) =>
-    adminApiRequest<{ ok: boolean; key: string; value: string; data_type: string }>(
-      `/site-settings/${encodeURIComponent(key)}`,
+    adminApiRequest<{
+      ok: boolean; key: string; value: string; data_type: string;
+      old_value: string | null; default: string; live: boolean; danger: boolean;
+      propagation_seconds: number;
+    }>(
+      `/site-settings/${encodeURIComponent(key)}/`,
       { method: 'PUT', body: JSON.stringify({ value }) }
     ),
+
+  /** Every recorded change to one setting, newest first, actor handle joined. */
+  getSiteSettingHistory: (key: string, limit = 20) =>
+    adminApiRequest<{ key: string; rows: SiteSettingHistoryRow[] }>(
+      `/site-settings/${encodeURIComponent(key)}/history/?limit=${limit}`
+    ),
+
+  // ---- sponsored accounts ----
+  // POST/PATCH responses carry no aggregates (active_posts, posts_total,
+  // karma_paid, engagements come back as 0) — only listSponsors computes them.
+  listSponsors: () => adminApiRequest<SponsorRow[]>(`/sponsors/`),
+  addSponsor: (xUsername: string, karmaPerPost: number, notes = '') =>
+    adminApiRequest<SponsorRow>(`/sponsors/`, {
+      method: 'POST',
+      body: JSON.stringify({ x_username: xUsername, karma_per_post: karmaPerPost, notes }),
+    }),
+  updateSponsor: (sponsorId: string, patch: SponsorPatch) =>
+    adminApiRequest<SponsorRow>(`/sponsors/${sponsorId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteSponsor: (sponsorId: string) =>
+    adminApiRequest<{ ok: boolean }>(`/sponsors/${sponsorId}/`, { method: 'DELETE' }),
+
+  // ---- operations ----
+  opsHealth: () => adminApiRequest<OpsHealth>(`/ops/health/`),
+  opsBatches: (status = '', limit = 25, offset = 0) =>
+    adminApiRequest<OpsPage<OpsBatch>>(`/ops/batches/?status=${status}&limit=${limit}&offset=${offset}`),
+  opsRequeueBatch: (batchId: string) =>
+    adminApiRequest<{ ok: boolean; status: string; queued: boolean }>(
+      `/ops/batches/${batchId}/requeue/`, { method: 'POST', body: JSON.stringify({}) }),
+  opsOutbox: (status = 'failed', limit = 25, offset = 0) =>
+    adminApiRequest<OpsPage<OpsNotification>>(`/ops/outbox/?status=${status}&limit=${limit}&offset=${offset}`),
+  opsRetryNotification: (eventId: string) =>
+    adminApiRequest<{ ok: boolean; status: string }>(
+      `/ops/outbox/${eventId}/retry/`, { method: 'POST', body: JSON.stringify({}) }),
+  opsAudit: (q: { action?: string; actor?: string; limit?: number; offset?: number } = {}) =>
+    adminApiRequest<OpsPage<OpsAuditRow> & { actions: string[] }>(
+      `/ops/audit/?action=${encodeURIComponent(q.action || '')}&actor=${encodeURIComponent(q.actor || '')}` +
+      `&limit=${q.limit ?? 50}&offset=${q.offset ?? 0}`),
+  opsPosts: (status = 'active', q = '', limit = 25, offset = 0) =>
+    adminApiRequest<OpsPage<OpsPost>>(
+      `/ops/posts/?status=${status}&q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`),
+  opsCancelPost: (postId: string, reason: string) =>
+    adminApiRequest<{ ok: boolean; refunded: number }>(
+      `/ops/posts/${postId}/cancel/`, { method: 'POST', body: JSON.stringify({ reason }) }),
 };
+
+export interface OpsPage<T> { items: T[]; total: number; limit: number; offset: number }
+
+export interface OpsHealth {
+  gateway: { configured: boolean; reachable: boolean; credits: number | null; error: string | null; checked_at: string | null };
+  sponsor_feed: { stream_enabled: boolean; active_sponsors: number; last_poll_at: string | null; minutes_since_poll: number | null; poll_seconds: number };
+  batches: { pending: number; processing: number; failed: number; held: number; failed_24h: number; oldest_waiting_minutes: number | null };
+  outbox: { pending: number; processing: number; failed: number };
+}
+
+export interface OpsBatch {
+  id: string; user_id: string; user_handle: string | null; status: string; held: boolean;
+  engagements: number; passed: number | null; failed: number | null; credits_awarded: number | null;
+  message: string; age_minutes: number; created_at: string | null; completed_at: string | null;
+}
+
+export interface OpsNotification {
+  id: string; event_type: string; status: string; retry_count: number; max_retries: number;
+  error_message: string; telegram_id: number | null; payload: Record<string, unknown>;
+  created_at: string | null; next_retry_at: string | null;
+}
+
+export interface OpsAuditRow {
+  id: string; action: string; target_type: string; target_id: string | null;
+  detail: Record<string, unknown>; actor_id: string | null; actor_handle: string | null;
+  actor_role: string | null; created_at: string | null;
+}
+
+export interface OpsPost {
+  id: string; x_link: string; tweet_text: string; author: string | null; poster_id: string;
+  poster_handle: string | null; is_sponsored: boolean; status: string; escrow: number;
+  initial_escrow: number; engagements: number; created_at: string | null;
+}
 
 // URL normalization helper for frontend validation
 export function normalizeXLink(url: string): {

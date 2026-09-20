@@ -41,5 +41,35 @@ class TelegramClient:
         return True
 
 
+    async def send_photo(
+        self,
+        chat_id: int,
+        photo_url: str,
+        caption: str,
+        parse_mode: str = "HTML",
+        reply_markup: dict | None = None,
+    ) -> bool:
+        """Send an image with the message as its caption — the waitlist card.
+
+        Telegram fetches `photo_url` itself, so it must be publicly reachable;
+        it answers 400 when it can't (the caller falls back to plain text).
+        Captions are capped at 1024 characters by the API.
+        """
+        if not self.bot_token:
+            logger.warning("TELEGRAM_BOT_TOKEN not configured — skipping send")
+            return False
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
+        payload: dict = {
+            "chat_id": chat_id, "photo": photo_url,
+            "caption": caption[:1024], "parse_mode": parse_mode,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()  # raise → caller falls back / outbox retries
+        return True
+
+
 def get_telegram_client() -> TelegramClient:
     return TelegramClient()

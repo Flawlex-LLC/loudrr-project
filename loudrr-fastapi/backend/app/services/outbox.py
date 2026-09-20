@@ -459,6 +459,9 @@ _WEBAPP_BUTTON_EVENTS = frozenset({
     OutboxEventType.WAITLIST_SUBMITTED.value,
 })
 
+# these two carry the applicant's card image (score + smart followers)
+_CARD_EVENTS = _WEBAPP_BUTTON_EVENTS
+
 
 def _waitlist_reply_markup(event_type: str) -> dict | None:
     """Return the inline_keyboard payload for a waitlist card, or None when
@@ -472,6 +475,27 @@ def _waitlist_reply_markup(event_type: str) -> dict | None:
             [{"text": "Open Loudrr", "web_app": {"url": settings.miniapp_url}}]
         ]
     }
+
+
+def _card_url(x_username: str) -> str | None:
+    """The applicant's share card, rendered by the frontend from the score and
+    smart followers we stored at sign-up (/api/cards/waitlist).
+
+    Returns None when no frontend origin is configured — then the message goes
+    out as plain text rather than not at all.
+    """
+    handle = (x_username or "").strip().lstrip("@")
+    if not handle:
+        return None
+    base = (settings.miniapp_url or settings.site_url or "").rstrip("/")
+    if base.endswith("/app"):
+        base = base[:-4]
+    if not base.startswith("http"):
+        return None
+    # Telegram caches a photo per URL, and the score can change between the
+    # "you're on the list" card and the approval card — so bust the cache.
+    stamp = int(utcnow().timestamp())
+    return f"{base}/api/cards/waitlist?username={handle}&v={stamp}"
 
 
 def _require_sent(sent) -> None:
@@ -500,6 +524,28 @@ async def _dispatch(db, ev: OutboxEvent) -> None:
             # has a one-tap path back to the mini-app. Skipped (markup=None)
             # when settings.miniapp_url is empty so we don't send a broken btn.
             reply_markup = _waitlist_reply_markup(ev.event_type)
+            # The waitlist cards go out as the card IMAGE with the message as
+            # its caption — that card is the thing people screenshot and share.
+            # If Telegram can't fetch it (card route down, origin unreachable),
+            # fall back to the text so the applicant still hears from us.
+            card = _card_url(p.get("x_username", "")) if ev.event_type in _CARD_EVENTS else None
+            if card:
+                sent = None
+                try:
+                    sent = await telegram.send_photo(
+                        p["telegram_id"], card, text, reply_markup=reply_markup,
+                    )
+                except Exception as e:
+                    # Telegram couldn't fetch the card — send the words instead
+                    logger.warning(
+                        "outbox %s: card image failed (%s) — sending text instead", ev.id, e,
+                    )
+                if sent is not None:
+                    # False means no bot token: nothing was delivered, so this
+                    # must stay retryable rather than fall through to a second
+                    # send that would fail the same way
+                    _require_sent(sent)
+                    return
             _require_sent(await telegram.send_message(
                 p["telegram_id"], text, reply_markup=reply_markup,
             ))

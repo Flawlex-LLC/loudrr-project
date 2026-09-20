@@ -13,11 +13,16 @@ from app.services.outbox import OutboxService
 
 
 class _FakeTelegram:
-    def __init__(self, *, fail=False, error="telegram down", unconfigured=False, sink=None):
+    def __init__(self, *, fail=False, error="telegram down", unconfigured=False, sink=None,
+                 photo_fail=False):
         self.fail = fail
         self.error = error
         self.unconfigured = unconfigured
         self.sent = sink if sink is not None else []
+        # sendPhoto is its own path: Telegram fetches the card URL itself and
+        # 400s when it can't, while the text message would still go through
+        self.photo_fail = photo_fail
+        self.photos: list = []
 
     async def send_message(self, chat_id, text, parse_mode="HTML", reply_markup=None):
         if self.fail:
@@ -25,6 +30,16 @@ class _FakeTelegram:
         if self.unconfigured:
             return False  # the real client's "TELEGRAM_BOT_TOKEN not configured"
         self.sent.append((chat_id, text, reply_markup))
+        return True
+
+    async def send_photo(self, chat_id, photo_url, caption, parse_mode="HTML", reply_markup=None):
+        if self.photo_fail:
+            raise RuntimeError("Bad Request: wrong file identifier/HTTP URL specified")
+        if self.fail:
+            raise RuntimeError(self.error)
+        if self.unconfigured:
+            return False
+        self.photos.append((chat_id, photo_url, caption, reply_markup))
         return True
 
 
@@ -325,8 +340,8 @@ async def test_drain_attaches_webapp_button_for_waitlist_approved(
     result = await outbox.drain(db_session)
     assert result["sent"] == 1 and result["failed"] == 0
 
-    assert len(fake.sent) == 1
-    chat_id, _text, reply_markup = fake.sent[0]
+    assert len(fake.photos) == 1        # the card image, not a bare message
+    chat_id, _photo, _caption, reply_markup = fake.photos[0]
     assert chat_id == 42
     assert reply_markup is not None
     # one row, one button: "Open Loudrr" with a WebApp link
@@ -344,6 +359,7 @@ async def test_drain_no_webapp_button_when_miniapp_url_unset(
     monkeypatch.setattr(telegram, "get_telegram_client", lambda: fake)
     monkeypatch.setattr(outbox, "get_telegram_client", telegram.get_telegram_client)
     monkeypatch.setattr(outbox.settings, "miniapp_url", "")
+    monkeypatch.setattr(outbox.settings, "site_url", "")   # no origin -> no card either
 
     await OutboxService.queue_waitlist_submitted(
         db_session, entry_id=uuid.uuid4(), telegram_id=43,
@@ -617,3 +633,79 @@ async def test_public_text_is_clipped(db_session):
     await db_session.commit()
     assert len(ev.payload["reason"]) == outbox.MAX_PUBLIC_TEXT
     assert ev.payload["reason"].endswith("…")
+
+
+# ============================================================================
+# the waitlist cards ride along with the message (score + smart followers)
+# ============================================================================
+async def test_waitlist_card_is_sent_as_the_image_with_the_message_as_caption(
+    db_session, monkeypatch,
+):
+    fake = _FakeTelegram()
+    monkeypatch.setattr(telegram, "get_telegram_client", lambda: fake)
+    monkeypatch.setattr(outbox, "get_telegram_client", telegram.get_telegram_client)
+    monkeypatch.setattr(outbox.settings, "miniapp_url", "https://app.loudrr.com/app")
+
+    await OutboxService.queue_waitlist_approved(
+        db_session, entry_id=uuid.uuid4(), telegram_id=77, x_username="@Alice",
+    )
+    await db_session.commit()
+    assert (await outbox.drain(db_session))["sent"] == 1
+
+    assert fake.sent == []               # nothing went out as plain text
+    chat_id, photo, caption, markup = fake.photos[0]
+    assert chat_id == 77
+    # the card route renders the stored Sorsa score + smart followers
+    assert photo.startswith("https://app.loudrr.com/api/cards/waitlist?username=Alice&v=")
+    assert "approved" in caption.lower() or "in!" in caption.lower()
+    assert markup["inline_keyboard"][0][0]["text"] == "Open Loudrr"
+
+
+async def test_waitlist_message_still_arrives_when_the_card_image_fails(
+    db_session, monkeypatch,
+):
+    """Telegram 400s when it can't fetch the card URL. The applicant must still
+    be told they're on the list."""
+    fake = _FakeTelegram(photo_fail=True)
+    monkeypatch.setattr(telegram, "get_telegram_client", lambda: fake)
+    monkeypatch.setattr(outbox, "get_telegram_client", telegram.get_telegram_client)
+    monkeypatch.setattr(outbox.settings, "miniapp_url", "https://app.loudrr.com/app")
+
+    await OutboxService.queue_waitlist_submitted(
+        db_session, entry_id=uuid.uuid4(), telegram_id=78, x_username="bob",
+    )
+    await db_session.commit()
+    assert (await outbox.drain(db_session))["sent"] == 1
+    assert fake.photos == []
+    assert len(fake.sent) == 1 and fake.sent[0][0] == 78
+
+
+async def test_no_card_without_a_frontend_origin(db_session, monkeypatch):
+    fake = _FakeTelegram()
+    monkeypatch.setattr(telegram, "get_telegram_client", lambda: fake)
+    monkeypatch.setattr(outbox, "get_telegram_client", telegram.get_telegram_client)
+    monkeypatch.setattr(outbox.settings, "miniapp_url", "")
+    monkeypatch.setattr(outbox.settings, "site_url", "")
+
+    await OutboxService.queue_waitlist_approved(
+        db_session, entry_id=uuid.uuid4(), telegram_id=79, x_username="carol",
+    )
+    await db_session.commit()
+    assert (await outbox.drain(db_session))["sent"] == 1
+    assert fake.photos == [] and len(fake.sent) == 1
+
+
+async def test_a_card_send_with_no_bot_token_is_not_marked_sent(db_session, monkeypatch):
+    """`send_photo` returning False means nothing was delivered — the event has
+    to stay retryable instead of being quietly marked sent."""
+    fake = _FakeTelegram(unconfigured=True)
+    monkeypatch.setattr(telegram, "get_telegram_client", lambda: fake)
+    monkeypatch.setattr(outbox, "get_telegram_client", telegram.get_telegram_client)
+    monkeypatch.setattr(outbox.settings, "miniapp_url", "https://app.loudrr.com/app")
+
+    await OutboxService.queue_waitlist_approved(
+        db_session, entry_id=uuid.uuid4(), telegram_id=80, x_username="dave",
+    )
+    await db_session.commit()
+    result = await outbox.drain(db_session)
+    assert result["sent"] == 0 and result["failed"] == 1

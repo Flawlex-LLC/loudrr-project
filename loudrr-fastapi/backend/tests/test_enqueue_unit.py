@@ -87,9 +87,30 @@ async def test_enqueue_uses_arq_pool_when_enabled(monkeypatch):
     assert queued is True
     create_pool.assert_awaited_once()
     fake_pool.enqueue_job.assert_awaited_once_with(
-        "process_verification_batch", "batch-xyz"
+        "process_verification_batch", "batch-xyz", _job_id=None
     )
     assert enqueue_mod._pool is fake_pool
+
+
+async def test_enqueue_passes_job_id_for_dedupe(monkeypatch):
+    """job_id rides through as arq's _job_id — that is what stops the request
+    path and the stuck-batch sweeper from running one batch on two workers."""
+    monkeypatch.setattr(enqueue_mod.settings, "use_task_queue", True)
+    monkeypatch.setattr(enqueue_mod.settings, "redis_url", "redis://localhost:6379/0")
+
+    fake_pool = MagicMock()
+    fake_pool.enqueue_job = AsyncMock(return_value=None)  # arq: "already queued"
+    fake_pool.aclose = AsyncMock()
+    monkeypatch.setattr("arq.create_pool", AsyncMock(return_value=fake_pool))
+
+    queued = await enqueue_mod.enqueue(
+        "process_verification_batch", "batch-1", job_id="verify:batch-1"
+    )
+
+    assert queued is True  # a dedupe hit is still "handled by the queue"
+    fake_pool.enqueue_job.assert_awaited_once_with(
+        "process_verification_batch", "batch-1", _job_id="verify:batch-1"
+    )
 
 
 # ---------- singleton: shared pool across calls ----------

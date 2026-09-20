@@ -1,9 +1,11 @@
-"""User-facing read models and the TweetScout-backed write flows (Ch10).
+"""User-facing read models and the score-provider write flows (Ch10).
 
-Endpoints 2, 3, 4, 8. The two write flows (link-X, onboarding) follow the
-golden rule: the TweetScout call happens with **no DB lock held**, then the
-result is written. TweetScout is the only paid call here, and its result is
-cached in `x_profiles` so it is fetched once, not on every read.
+Endpoints 2, 3, 4, 8. The write flows (link-X, onboarding) follow the golden
+rule: the score-provider call happens with **no DB lock held**, then the
+result is written. The result is cached in `x_profiles` so it is fetched
+once, not on every read. (Field names still say "tweetscout" — the provider
+behind them is app/integrations/score_provider.py. Sign-up fetches and the
+refresh button live in services/scores.py.)
 """
 import logging
 import re
@@ -11,7 +13,7 @@ from datetime import datetime
 
 from app.core.errors import BadRequest
 from app.core.time_utils import utcnow
-from app.integrations.loudrr_analytics import get_score_client
+from app.integrations.score_provider import get_score_client
 from app.models.user import User
 from app.repositories.x_profile import XProfileRepository
 from app.services import feed
@@ -63,6 +65,11 @@ async def _upsert_x_profile(db, user: User, values: dict):
     if profile is None:
         return await repo.create(user_id=user.id, **values)
     for key, val in values.items():
+        # The OAuth-proven id is never replaced by provider data: a blank one
+        # would break submit_post's ownership check, and a different one means
+        # the provider answered for another account (renamed/recycled handle).
+        if key == "x_user_id" and (not val or (user.x_verified and profile.x_user_id)):
+            continue
         setattr(profile, key, val)
     profile.updated_at = utcnow()
     return profile
@@ -75,8 +82,18 @@ async def link_x_account(db, *, user: User, x_username: str) -> dict:
         raise BadRequest("Username is required")
     if not _X_USERNAME_RE.match(x_username):
         raise BadRequest("Invalid username format")
+    # An OAuth-verified handle is proof of ownership; this endpoint has none.
+    # Letting a verified user swap to any handle would keep the verified badge
+    # on a handle they don't own (and borrow its tier multiplier).
+    if user.x_verified and x_username.lower() != (user.x_username or "").lower():
+        raise BadRequest(
+            "Your X account is verified. To use a different account, "
+            "reconnect it through X."
+        )
 
-    # external call FIRST, holding no lock (spec §7)
+    # external call FIRST, holding no lock (spec §7) — and no pooled
+    # connection either: end the auth dependency's read transaction
+    await db.commit()
     data = await get_score_client().get_user_data(x_username)
     if data is None:
         raise BadRequest("Username not found. Please check and try again.")
@@ -106,6 +123,11 @@ async def complete_onboarding(db, *, user: User) -> dict:
 
     # already onboarded — a non-zero score means we've already fetched
     if user.tweetscout_score and user.tweetscout_score > 0:
+        if user.tweetscout_last_updated is None:
+            # the mini-app's onboarding gate keys on this timestamp; a scored
+            # user without one would be sent back to onboarding forever
+            user.tweetscout_last_updated = utcnow()
+            await db.commit()
         return {
             "success": True,
             "already_onboarded": True,
@@ -113,6 +135,7 @@ async def complete_onboarding(db, *, user: User) -> dict:
             "tier": tier.tier_for(user.tweetscout_score),
         }
 
+    await db.commit()  # release the pooled connection before the provider call
     data = await get_score_client().get_user_data(user.x_username)
     if not data:
         # benefit of the doubt: let them in with a default score, retry later
@@ -141,9 +164,10 @@ async def complete_onboarding(db, *, user: User) -> dict:
     }
 
 
-# ---- background task (Ch16): refresh a user's TweetScout cache ----
+# ---- background task (Ch16): refresh a user's score cache ----
 async def fetch_tweetscout_for_user(db, user_id) -> bool:
-    """Fetch TweetScout for a user and cache it (on approval / link-X / cron)."""
+    """Fetch a user's score and cache it. Manual/ops use only — nothing
+    schedules it; approval copies the sign-up score (services/scores.py)."""
     user = await db.get(User, user_id)
     if user is None or not user.x_username:
         return False

@@ -5,19 +5,10 @@ DB, and the service caps/normalizes what it stores.
 """
 from types import SimpleNamespace
 
-from app.core.crypto import sign_x_proof
-from app.core.time_utils import utcnow
 from app.schemas.waitlist import OtherPlatform, OtherPlatformKind
 from app.services import waitlist as waitlist_svc
 
-
-def _proof(tg_id: int, username: str, x_user_id: str = "1"):
-    return sign_x_proof({
-        "tg_id": tg_id,
-        "x_username": username,
-        "x_user_id": x_user_id,
-        "iat": int(utcnow().timestamp()),
-    })
+# register needs a browser-confirmed proof: ``confirmed_x_proof`` (conftest.py)
 
 
 # ---- waitlist register endpoint: malformed body is a 422, never a 500 ----
@@ -31,9 +22,9 @@ async def test_register_missing_x_proof_422(client):
 
 
 # ---- service caps / normalizes what it stores ----
-async def test_other_platforms_capped_at_five(db_session):
+async def test_other_platforms_capped_at_five(db_session, confirmed_x_proof):
     payload = SimpleNamespace(
-        x_proof=_proof(tg_id=9_500_003, username="capuser"),
+        x_proof=await confirmed_x_proof(9_500_003, "capuser"),
         region=None,
         niche=None,
         referral_code=None,
@@ -48,11 +39,11 @@ async def test_other_platforms_capped_at_five(db_session):
     assert len(result.entry.other_platforms) == 5  # 7 submitted, stored 5
 
 
-async def test_large_telegram_id_is_accepted(db_session):
+async def test_large_telegram_id_is_accepted(db_session, confirmed_x_proof):
     """Telegram IDs are 64-bit — a value past 32-bit must store fine (BigInteger)."""
     big = 8_888_888_888  # > 2**32
     payload = SimpleNamespace(
-        x_proof=_proof(tg_id=big, username="biguser"),
+        x_proof=await confirmed_x_proof(big, "biguser"),
         region=None,
         niche=None,
         referral_code=None,

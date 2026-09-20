@@ -207,6 +207,11 @@ class CreditService:
         user = result.scalar_one()
         # refund dcredits back.
         user.credits += amount
+        # ...and un-count the spend it reverses. total_credits_spent is the
+        # karma that actually left for good; without this a refunded post makes
+        # lifetime spent outgrow lifetime earned and the DB's earned_ge_spent
+        # check kills the user's NEXT post (they recycle the same karma).
+        user.total_credits_spent -= min(amount, user.total_credits_spent)
         txn = Transaction(
             user_id=user.id,
             type=TransactionType.REFUND,
@@ -260,6 +265,9 @@ class CreditService:
         user = result.scalar_one()
         # no daily cap - admin bypass it
         user.credits += amount
+        # a grant is karma received: it must count as earned, or the DB's
+        # earned_ge_spent check refuses the first thing the user spends it on
+        user.total_credits_earned += amount
         txn = Transaction(
             user_id=user.id,
             type=TransactionType.ADMIN_GRANT,

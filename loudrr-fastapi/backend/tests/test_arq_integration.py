@@ -8,6 +8,7 @@ Requires a running Redis. If none is reachable it skips in ~0.3s (a raw socket
 probe, NOT arq's slow retrying connect), so the suite stays green without infra.
 Run a throwaway Redis to exercise it:  docker run --rm -p 6379:6379 redis:7
 """
+import os
 import socket
 from decimal import Decimal
 from urllib.parse import urlparse
@@ -24,7 +25,11 @@ from app.models.verification_batch import VerificationBatch
 _REDIS_DSN = app_settings.redis_url or "redis://localhost:6379/0"
 _u = urlparse(_REDIS_DSN)
 _HOST, _PORT = _u.hostname or "localhost", _u.port or 6379
-TEST_DATABASE_URL = app_settings.database_url.rsplit("/", 1)[0] + "/loudrr_test"
+TEST_DATABASE_URL = (
+    app_settings.database_url.rsplit("/", 1)[0]
+    + "/"
+    + os.environ.get("TEST_DATABASE_NAME", "loudrr_test")
+)
 
 
 def _redis_reachable() -> bool:

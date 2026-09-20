@@ -58,7 +58,8 @@ async def test_miniapp_settings_endpoint(client, db_session):
     # tier bands ship alongside so edge surfaces (the OG card route) can label
     # a score with the live thresholds instead of a hardcoded copy
     assert isinstance(body["tiers"], list) and body["tiers"]
-    assert all({"name", "min_score"} == set(t) for t in body["tiers"])
+    # each band carries its karma multiplier too (the mini-app tier table)
+    assert all({"name", "min_score", "multiplier"} == set(t) for t in body["tiers"])
     # highest threshold first — consumers take the first band a score clears
     mins = [t["min_score"] for t in body["tiers"]]
     assert mins == sorted(mins, reverse=True)
@@ -106,3 +107,10 @@ async def test_whoami_with_user(client, make_user):
 async def test_whoami_unknown_user_401(client):
     r = await client.get("/whoami", params={"telegram_id": 123456})
     assert r.status_code == 401
+
+def test_openapi_docs_are_dev_only():
+    """In prod /docs and /openapi.json published the entire admin API to anyone."""
+    from app.main import docs_kwargs
+
+    assert docs_kwargs(True) == {}
+    assert docs_kwargs(False) == {"docs_url": None, "redoc_url": None, "openapi_url": None}

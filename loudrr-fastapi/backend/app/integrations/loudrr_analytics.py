@@ -1,10 +1,13 @@
-"""Loudrr Analytics client — the ONLY score provider.
+"""Loudrr Analytics client — LEGACY score provider (SCORE_PROVIDER=loudrr).
+
+The default provider is now Sorsa (app/integrations/sorsa.py); this client
+stays so the analytics service can be switched back on with one env var.
+See app/integrations/score_provider.py for the switch.
 
 A user's Loudrr Score + X profile comes from OUR OWN influence graph
-(the loudrr-analytics-service). We deliberately do NOT fall back to any
-external paid service; if the analytics service is down / unset, the client
-returns None and callers degrade gracefully to "default score, retry later"
-(never a 500, never a punitive zero for the user).
+(the loudrr-analytics-service). If the analytics service is down / unset, the
+client returns None and callers degrade gracefully to "default score, retry
+later" (never a 500, never a punitive zero for the user).
 
 Scale note: the Loudrr Score is 0-6000, but the tier thresholds top out at
 1000 (GOAT) — anyone above 1000 is top tier, which is the intended behavior
@@ -123,11 +126,3 @@ class LoudrrAnalyticsClient:
 def get_loudrr_client() -> LoudrrAnalyticsClient:
     """Factory — a client bound to the configured analytics base URL."""
     return LoudrrAnalyticsClient()
-
-
-def get_score_client():
-    """The score provider — always the Loudrr analytics graph. Kept as a
-    separate factory (rather than inlining LoudrrAnalyticsClient at call
-    sites) so tests can monkeypatch this ONE symbol to inject a fake
-    provider without having to reach into the analytics module internals."""
-    return get_loudrr_client()

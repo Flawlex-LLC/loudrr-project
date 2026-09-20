@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 # Transaction whose description says "Karma decay" + admin_id = nil-UUID is
 # unambiguously a system action.
 DECAY_SYSTEM_ACTOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+# every decay charge's idempotency_key starts with this, which is also how the
+# inactivity query tells our own charges apart from real user activity
+DECAY_IDEMPOTENCY_PREFIX = "karma_decay:"
 
 
 async def reset_daily_credits(db) -> int:
@@ -56,11 +59,14 @@ async def expire_old_posts(db) -> int:
         # capture the refund amount before cancel_post zeros the escrow
         refund_amount = post.escrow
         poster = await UserRepository(db).get(id=post.user_id)
-        await posts_svc.cancel_post(db, post, refund=True)  # commits per post
+        # sponsored posts are platform-funded: their leftover escrow just
+        # lapses (refunding it would mint karma to the platform account)
+        sponsored = post.platform == "sponsor"
+        await posts_svc.cancel_post(db, post, refund=not sponsored)  # commits per post
         # queue the user-facing notification in its own follow-up txn (cancel_post
         # already committed). This is best-effort — the cancel/refund itself is
         # the source of truth; the outbox just tells the user.
-        if poster is not None and poster.telegram_id is not None:
+        if not sponsored and poster is not None and poster.telegram_id is not None:
             await OutboxService.queue_post_expired(
                 db, post_id=post.id, user_id=post.user_id,
                 telegram_id=poster.telegram_id, refund_amount=refund_amount,
@@ -129,7 +135,14 @@ async def decay_inactive_karma(db) -> int:
     stmt = (
         select(User.id, last_activity.label("last_active"))
         .select_from(User)
-        .outerjoin(Transaction, Transaction.user_id == User.id)
+        .outerjoin(
+            Transaction,
+            # the decay charge is OUR row, not the user doing something: counting
+            # it as activity re-armed the whole threshold, so an idle balance
+            # decayed once a fortnight instead of compounding daily
+            (Transaction.user_id == User.id)
+            & ~func.coalesce(Transaction.idempotency_key, "").like(f"{DECAY_IDEMPOTENCY_PREFIX}%"),
+        )
         .where(User.is_banned.is_(False), User.credits > Decimal("0"))
         .group_by(User.id, User.created_at)
         .having(last_activity < cutoff)
@@ -148,14 +161,17 @@ async def decay_inactive_karma(db) -> int:
         decay_amount = (user.credits * rate).quantize(Decimal("0.0001"))
         if decay_amount < Decimal("0.0001"):
             continue
-        idem = f"karma_decay:{user_id}:{today_iso}"
-        txn = await CreditService(db, user).apply_penalty(
+        idem = f"{DECAY_IDEMPOTENCY_PREFIX}{user_id}:{today_iso}"
+        before = user.credits
+        await CreditService(db, user).apply_penalty(
             amount=decay_amount,
             admin_id=DECAY_SYSTEM_ACTOR_ID,
             idempotency_key=idem,
             description="Karma decay (inactivity)",
         )
-        if txn is not None:
+        # a same-day re-run returns the existing charge without deducting again;
+        # only count what actually moved so the log isn't fiction
+        if user.credits < before:
             decayed += 1
     if decayed:
         logger.info("decay_inactive_karma: decayed %s users", decayed)

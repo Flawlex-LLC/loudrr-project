@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(30.0)
 
+# Gateway responses that mean our credentials/credits are the problem. These
+# never self-heal by retrying and must not be paid out as "benefit of the
+# doubt" (see verify_reply).
+_UNAVAILABLE_STATUSES = frozenset({401, 402, 403})
+
 
 def _resolve_upstream() -> tuple[str, str]:
     """Return (base_url_with_/twitter_suffix, api_key) from the gateway
@@ -110,6 +115,21 @@ class TwitterClient:
                     data = resp.json()
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
+                if status in _UNAVAILABLE_STATUSES:
+                    # OUR side is broken (bad key / no credits / blocked), not
+                    # X. Benefit of the doubt here would pay every claim in
+                    # the system unverified until someone notices — so this
+                    # is a hold, not a pass. claims.run_batch parks the batch
+                    # and the stuck-batch sweeper retries it.
+                    logger.error(
+                        "Twitter API %s — verification unavailable: %s",
+                        status, e.response.text[:100],
+                    )
+                    return {
+                        "passed": False, "reply_verified": False, "like_verified": True,
+                        "error": f"verification unavailable: {status}",
+                        "skipped": False, "unavailable": True,
+                    }
                 logger.warning(
                     "Twitter API %s (attempt %s/%s), assuming passed: %s",
                     status, attempt + 1, attempts, e.response.text[:100],

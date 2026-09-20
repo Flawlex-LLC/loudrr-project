@@ -16,6 +16,12 @@ from app.services.site_settings import get_setting
 logger = logging.getLogger(__name__)
 
 
+class VerificationUnavailable(Exception):
+    """Our verification path is misconfigured (gateway key rejected, credits
+    exhausted). Distinct from a transient outage: the batch must be held and
+    retried, never settled as passed."""
+
+
 @dataclass
 class ToVerify:
     engagement_id: uuid.UUID
@@ -47,6 +53,8 @@ async def _verify_single(
     api = await client.verify_reply(
         tweet_id=item.tweet_id, x_username=x_username, max_retries=max_retries,
     )
+    if api.get("unavailable"):
+        raise VerificationUnavailable(api.get("error") or "verification unavailable")
     if api.get("skipped"):
         return VResult(item.engagement_id, item.post_id, passed=True,
                        reply_verified=False, skipped=True, error=api.get("error"))

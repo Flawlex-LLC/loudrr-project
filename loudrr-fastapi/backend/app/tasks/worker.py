@@ -6,14 +6,16 @@ Each task opens its own DB session and delegates to the already-built,
 already-tested service logic. On-demand tasks (verification batch, tweetscout
 fetch) are enqueued from request handlers; the rest run on a cron schedule.
 """
+import asyncio
+import contextlib
 import logging
 
-from arq import cron
+from arq import Retry, cron
 from arq.connections import RedisSettings
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.services import claims, maintenance, outbox, users
+from app.services import claims, maintenance, outbox, scores, sponsor_stream, users
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,23 @@ async def process_verification_batch(ctx, batch_id):
 async def fetch_tweetscout_for_user(ctx, user_id):
     async with SessionLocal() as db:
         return await users.fetch_tweetscout_for_user(db, user_id)
+
+
+# sign-up score fetch: retry this ONE job when the provider is unavailable
+# (proxy timeouts, pushback) — 1, 3 then 9 minutes later. Not a scheduler: it
+# only ever re-runs the sign-up fetch that failed.
+SIGNUP_SCORE_RETRY_DELAYS_S = (60, 180, 540)
+
+
+async def fetch_waitlist_score(ctx, entry_id):
+    """Sign-up: fetch the new applicant's score once and store it on the
+    waitlist entry (the only background score fetch — no schedule)."""
+    async with SessionLocal() as db:
+        outcome = await scores.fetch_waitlist_score(db, entry_id)
+    attempt = ctx.get("job_try", 1)
+    if outcome == "unavailable" and attempt <= len(SIGNUP_SCORE_RETRY_DELAYS_S):
+        raise Retry(defer=SIGNUP_SCORE_RETRY_DELAYS_S[attempt - 1])
+    return outcome
 
 
 # ---- periodic ----
@@ -86,17 +105,53 @@ async def requeue_stuck_batches(ctx):
     from app.tasks.enqueue import enqueue
 
     async def _schedule(batch_id):
-        await enqueue("process_verification_batch", str(batch_id))
+        # same job id as the request path → a no-op if that batch is already
+        # queued/running (the sweeper keys on created_at, so it can fire while
+        # a long-backlogged batch is legitimately mid-flight)
+        await enqueue(
+            "process_verification_batch", str(batch_id), job_id=f"verify:{batch_id}",
+        )
 
     async with SessionLocal() as db:
         return await claims.requeue_stuck_batches(db, schedule=_schedule)
 
 
+async def startup(ctx):
+    """Load the admin-tuned TIER_* bands. The worker is its own process: the
+    API process reloads them on an admin edit, this one would otherwise pay
+    out with the hardcoded defaults (run_batch also refreshes them per batch)."""
+    from app.services import tier
+
+    async with SessionLocal() as db:
+        await tier.load_tiers_from_settings(db)
+
+    # sponsored accounts: a long-lived websocket, not a job — new posts of the
+    # monitored accounts become sponsored raid posts within seconds
+    if settings.sponsor_stream_enabled and settings.loudrr_gateway_api:
+        ctx["sponsor_stream"] = asyncio.create_task(sponsor_stream.run_forever(redis=ctx.get("redis")))
+
+
+async def shutdown(ctx):
+    task = ctx.get("sponsor_stream")
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.redis_url or "redis://localhost:6379/0")
+    on_startup = startup
+    on_shutdown = shutdown
+    # Nothing reads arq job results, and keeping them (default 1h) would make
+    # the deduplicating `verify:<batch_id>` job id refuse a legitimate re-run
+    # — e.g. a batch held by VerificationUnavailable and re-fired by the
+    # sweeper — for an hour after the first attempt finished.
+    keep_result = 0
     functions = [
         process_verification_batch,
         fetch_tweetscout_for_user,
+        fetch_waitlist_score,
         process_pending_outbox_events,
         retry_failed_outbox_events,
         cleanup_old_outbox_events,
@@ -137,4 +192,6 @@ class WorkerSettings:
         # to spread DB load. Compounds for free: day N+1 sees the already-
         # decayed balance from day N.
         cron(decay_inactive_karma, hour={2}, minute={0}),
+        # NO score cron on purpose: scores are fetched at sign-up
+        # (fetch_waitlist_score) and when the user taps Refresh score.
     ]

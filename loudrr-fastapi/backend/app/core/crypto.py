@@ -41,6 +41,10 @@ def verify_x_proof(
     token: str, max_age_seconds: int = 600
 ) -> dict[str, Any] | None:
     """Return the payload dict if signature valid and not expired, else None."""
+    # Same rule as minting: with the public dev default key anyone can forge
+    # a proof for any handle, so outside debug no such proof is ever valid.
+    if settings.secret_key == "dev-insecure-secret-change-me" and not settings.debug:
+        return None
     try:
         return _serializer().loads(token, max_age=max_age_seconds)
     except (BadSignature, SignatureExpired):

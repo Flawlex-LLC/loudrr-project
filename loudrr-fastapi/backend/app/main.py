@@ -69,7 +69,14 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
+def docs_kwargs(debug: bool) -> dict:
+    """Swagger/OpenAPI are dev-only: in prod they published the whole admin API
+    surface (every route, body shape and query param) to anyone who asked,
+    with no auth in front of them."""
+    return {} if debug else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan, **docs_kwargs(settings.debug))
 
 # CORS — the Next.js frontend proxies same-origin in prod, but allow the
 # configured origins for direct/dev calls. CORS_ALLOWED_ORIGINS is comma-sep.
@@ -192,14 +199,21 @@ async def miniapp_settings(db=Depends(get_session)):
     # published here so surfaces that can't import the backend — notably the
     # edge-runtime OG card route — can label a score with the CURRENT bands
     # instead of a hardcoded copy that silently drifts after a retune.
-    # Highest threshold first; multipliers are deliberately not exposed.
+    # Highest threshold first, with each tier's karma multiplier (the mini-app
+    # tier table shows it).
     from app.services.tier import TIERS
 
     return {
-        "post_cost_min": await get_setting(db, "POST_COST_MIN"),
-        "post_cost_max": await get_setting(db, "POST_COST_MAX"),
+        # defaults (the seeded values) — a missing row must not 500 the one
+        # request every mini-app screen loads first
+        "post_cost_min": await get_setting(db, "POST_COST_MIN", 10),
+        "post_cost_max": await get_setting(db, "POST_COST_MAX", 200),
+        # the Claim button's threshold — admin-tunable, so the mini-app must
+        # not hardcode its own "10" (the two would disagree after a retune)
+        "min_engagements_to_claim": await get_setting(db, "MIN_ENGAGEMENTS_TO_CLAIM", 10),
         "tiers": [
-            {"name": name, "min_score": min_score} for name, min_score, _ in TIERS
+            {"name": name, "min_score": min_score, "multiplier": float(multiplier)}
+            for name, min_score, multiplier in TIERS
         ],
     }
 

@@ -44,11 +44,36 @@ class Settings(BaseSettings):
     # doubt "skipped+passed" result (spec §0 #8, §5.2).
     loudrr_gateway_api: str = ""
     gateway_base_url: str = "https://gateway.loudrr.com"
+    # The worker holds the gateway's realtime tweet websocket and turns posts
+    # of admin-added sponsored accounts into sponsored raid posts
+    # (services/sponsor_stream.py). Needs LOUDRR_GATEWAY_API. Off by default:
+    # enable it on the ONE prod worker only — every extra process polls (and is
+    # billed) again, and a dev worker on the prod key would fight prod for the
+    # gateway's single websocket.
+    sponsor_stream_enabled: bool = False
+    # ...plus a search poll every N seconds that catches whatever the push
+    # misses (empty searches are free). 0 = push only.
+    sponsor_poll_seconds: int = 20
 
-    # Base URL of the loudrr-analytics-service. This is the ONLY score provider
-    # — no TweetScout fallback exists. Empty -> graceful "default score, retry
-    # later" (users are never punished for our infra being down; scores just
-    # return None and callers use the default).
+    # Which service supplies a user's score + smart followers (see
+    # app/integrations/score_provider.py):
+    #   "sorsa"  — Sorsa's public profile pages, read through the proxy pool
+    #   "loudrr" — LEGACY: the loudrr-analytics-service graph (URL/key below)
+    # Either way a miss returns None and callers degrade to "keep the old
+    # score / default, retry later" — never a 500, never a punitive zero.
+    score_provider: str = "sorsa"
+    # Rotating proxy pool for outbound scraping. Webshare "host:port:user:pass"
+    # lines or full http:// URLs, separated by newlines, commas, semicolons or
+    # spaces. SCRAPE_PROXIES (inline — set this in Coolify) wins over
+    # SCRAPE_PROXY_FILE (local dev; data/ is gitignored). With no pool the
+    # scraper refuses to run: we never scrape from the server's own IP.
+    scrape_proxies: str = ""
+    scrape_proxy_file: str = "data/proxies/webshare.txt"
+
+    # Base URL of the LEGACY loudrr-analytics-service (SCORE_PROVIDER=loudrr).
+    # Empty -> graceful "default score, retry later" (users are never punished
+    # for our infra being down; scores just return None and callers use the
+    # default).
     loudrr_analytics_url: str = ""
     # Optional shared secret sent as X-API-Key on requests to the analytics
     # service. Required by the analytics side (as ANALYTICS_API_KEY) for the

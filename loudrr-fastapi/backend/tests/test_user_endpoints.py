@@ -165,3 +165,44 @@ async def test_onboarding_api_down_benefit_of_doubt(client, make_user, monkeypat
     assert body["tweetscout_score"] == 0
     assert body["tier"] == "Anon"
     assert "message" in body
+
+
+# ---- launch audit (2026-09): the handle is owned by OAuth, not by this form ----
+async def test_link_x_refuses_to_change_a_verified_handle(client, make_user, monkeypatch):
+    await make_user(telegram_id=5010, x_username="alice", x_verified=True)
+    _mock_tweetscout(monkeypatch, _PROFILE)
+
+    r = await client.post(
+        "/user/link-x/", params={"telegram_id": 5010}, json={"x_username": "whale"}
+    )
+    assert r.status_code == 400
+    assert "verified" in str(r.json()).lower()
+
+
+async def test_link_x_same_handle_still_refreshes_when_verified(client, make_user, monkeypatch):
+    """Re-linking the SAME handle is just a score refresh — allowed."""
+    await make_user(telegram_id=5011, x_username="0xBlest_", x_verified=True)
+    _mock_tweetscout(monkeypatch, _PROFILE)
+
+    r = await client.post(
+        "/user/link-x/", params={"telegram_id": 5011}, json={"x_username": "@0xblest_"}
+    )
+    assert r.status_code == 200
+
+
+async def test_profile_refresh_never_blanks_oauth_user_id(make_user, db_session):
+    """The analytics profile may omit userId; that must not erase the id the
+    waitlist OAuth proved (submit_post's ownership check depends on it)."""
+    from app.services import users as users_svc
+
+    user = await make_user(telegram_id=5012, x_username="alice")
+    await XProfileRepository(db_session).create(
+        user_id=user.id, x_user_id="424242", username="alice",
+    )
+    await users_svc._upsert_x_profile(
+        db_session, user, users_svc._profile_values({"score": 10, "id": None}, "alice"),
+    )
+    await db_session.commit()
+    profile = await XProfileRepository(db_session).get(user_id=user.id)
+    assert profile.x_user_id == "424242"
+    assert profile.score == 10

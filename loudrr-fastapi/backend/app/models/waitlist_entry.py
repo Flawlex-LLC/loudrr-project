@@ -5,6 +5,7 @@ from sqlalchemy import (
     String, BigInteger, Boolean, ForeignKey, 
     JSON, Text, CheckConstraint, text,
     )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.time_utils import utcnow
 from app.db.base import Base
@@ -69,6 +70,14 @@ class WaitlistEntry(Base):
     x_user_id: Mapped[str] = mapped_column(
         String(32), default="", server_default="", nullable=False,
     )
+    # Score-provider result — fetched once at sign-up (background job) and
+    # again only when the applicant taps "Refresh score"; never on a schedule.
+    # score_data is the provider payload (profile + smart followers), copied
+    # onto the User at approval. score_updated_at = last finished fetch attempt
+    # (null = not fetched yet); it also drives the refresh cooldown.
+    score: Mapped[float | None] = mapped_column(default=None)
+    score_data: Mapped[dict | None] = mapped_column(JSONB, default=None)
+    score_updated_at: Mapped[datetime | None] = mapped_column(default=None)
 
     # profile data - region
     # profile data — region / niche validated by CHECK below

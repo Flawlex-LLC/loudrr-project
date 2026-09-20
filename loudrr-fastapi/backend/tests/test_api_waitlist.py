@@ -1,5 +1,7 @@
 """Integration tests for the /waitlist endpoints, through the ASGI app.
-Auth uses ?telegram_id= (the debug bypass); the limiter is off in the fixture."""
+Auth uses ?telegram_id= (the debug bypass); the limiter is off in the fixture.
+Register only accepts a proof whose handoff row was confirmed in the browser,
+so the happy paths use the ``confirmed_x_proof`` fixture (conftest.py)."""
 
 from app.core.crypto import sign_x_proof
 from app.core.time_utils import utcnow
@@ -20,9 +22,10 @@ def _body(x_proof: str | None = None, **kwargs):
     return {"x_proof": x_proof, **kwargs}
 
 
-async def test_register_ok(client):
+async def test_register_ok(client, confirmed_x_proof):
     r = await client.post(
-        "/waitlist/register/", params={"telegram_id": 111}, json=_body()
+        "/waitlist/register/", params={"telegram_id": 111},
+        json=_body(await confirmed_x_proof(111)),
     )
     assert r.status_code == 200
     data = r.json()
@@ -31,8 +34,11 @@ async def test_register_ok(client):
     assert data["referral_code"]
 
 
-async def test_register_idempotent(client):
-    await client.post("/waitlist/register/", params={"telegram_id": 111}, json=_body())
+async def test_register_idempotent(client, confirmed_x_proof):
+    await client.post(
+        "/waitlist/register/", params={"telegram_id": 111},
+        json=_body(await confirmed_x_proof(111)),
+    )
     r = await client.post(
         "/waitlist/register/", params={"telegram_id": 111}, json=_body()
     )
@@ -79,7 +85,7 @@ async def test_register_proof_tg_mismatch_returns_400(client):
     assert "different Telegram user" in r.json()["error"]
 
 
-async def test_register_expired_x_proof_returns_400(client, monkeypatch):
+async def test_register_expired_x_proof_returns_400(client, monkeypatch, confirmed_x_proof):
     """Endpoint-level expiry: a proof past its max_age must be rejected at
     the register endpoint (not just in unit tests of verify_x_proof).
     Monkeypatch max_age_seconds=-1 to force the token to be considered stale
@@ -93,19 +99,22 @@ async def test_register_expired_x_proof_returns_400(client, monkeypatch):
 
     monkeypatch.setattr(svc, "verify_x_proof", expired_verify)
 
+    # confirmed, so expiry is the only thing wrong with it
+    proof = await confirmed_x_proof(111)
     r = await client.post(
-        "/waitlist/register/", params={"telegram_id": 111}, json=_body()
+        "/waitlist/register/", params={"telegram_id": 111}, json=_body(proof)
     )
     assert r.status_code == 400
     assert "error" in r.json()
 
 
-async def test_register_idempotent_with_expired_proof(client, monkeypatch):
+async def test_register_idempotent_with_expired_proof(client, monkeypatch, confirmed_x_proof):
     """Already-registered users must get 'already_registered' even when the
     proof they echo back has expired — the idempotency check runs BEFORE
     proof verification (the documented idempotency contract)."""
     first = await client.post(
-        "/waitlist/register/", params={"telegram_id": 111}, json=_body()
+        "/waitlist/register/", params={"telegram_id": 111},
+        json=_body(await confirmed_x_proof(111)),
     )
     assert first.status_code == 200
 
@@ -125,18 +134,18 @@ async def test_register_idempotent_with_expired_proof(client, monkeypatch):
     assert r.json()["status"] == "already_registered"
 
 
-async def test_register_duplicate_x_user_id_400(client):
+async def test_register_duplicate_x_user_id_400(client, confirmed_x_proof):
     """Two different Telegram users, two DIFFERENT handles, but the SAME
     immutable X user id (a rename between authorizations) — the second
     registration must be rejected: one X account backs one entry."""
     r1 = await client.post(
         "/waitlist/register/", params={"telegram_id": 111},
-        json=_body(x_proof=_proof(tg_id=111, username="alice", x_user_id="424242")),
+        json=_body(x_proof=await confirmed_x_proof(111, "alice", "424242")),
     )
     assert r1.status_code == 200
     r2 = await client.post(
         "/waitlist/register/", params={"telegram_id": 222},
-        json=_body(x_proof=_proof(tg_id=222, username="alice_renamed", x_user_id="424242")),
+        json=_body(x_proof=await confirmed_x_proof(222, "alice_renamed", "424242")),
     )
     assert r2.status_code == 400
     assert "X account already registered" in r2.json()["error"]
@@ -148,13 +157,13 @@ async def test_register_requires_auth_401(client):
     assert r.status_code == 401
 
 
-async def test_registered_entry_is_oauth_verified(client, db_session):
+async def test_registered_entry_is_oauth_verified(client, db_session, confirmed_x_proof):
     from sqlalchemy import select
     from app.models.waitlist_entry import WaitlistEntry
 
     r = await client.post(
         "/waitlist/register/", params={"telegram_id": 4242},
-        json=_body(x_proof=_proof(tg_id=4242, username="carol", x_user_id="777")),
+        json=_body(x_proof=await confirmed_x_proof(4242, "carol", "777")),
     )
     assert r.status_code == 200
     row = (
@@ -167,10 +176,10 @@ async def test_registered_entry_is_oauth_verified(client, db_session):
     assert row.x_user_id == "777"
 
 
-async def test_status_endpoint(client):
+async def test_status_endpoint(client, confirmed_x_proof):
     await client.post(
         "/waitlist/register/", params={"telegram_id": 222},
-        json=_body(x_proof=_proof(tg_id=222, username="bob", x_user_id="2")),
+        json=_body(x_proof=await confirmed_x_proof(222, "bob", "2")),
     )
     waitlisted = await client.get("/waitlist/status/", params={"telegram_id": 222})
     assert waitlisted.status_code == 200

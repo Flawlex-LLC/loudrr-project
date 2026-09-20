@@ -80,4 +80,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # uses its asyncio loop's built-in concurrency. If you scale up via Coolify
 # replicas instead of in-container workers, this is correct. For bare-metal
 # multi-worker, swap to: gunicorn -k uvicorn.workers.UvicornWorker -w 4 app.main:app
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+#
+# --forwarded-allow-ips=*: this container is only reachable through Coolify's
+# Traefik on the docker network (port 8000 is never published), and uvicorn
+# by default trusts X-Forwarded-For from 127.0.0.1 only. Without this every
+# request carries Traefik's IP, and the per-IP slowapi limits on
+# /post/submit/ (20/h) and /session/queue-claim/ (30/h) become ONE shared
+# bucket for the whole userbase.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--proxy-headers", "--forwarded-allow-ips=*"]

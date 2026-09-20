@@ -271,3 +271,29 @@ async def test_user_counts_reflect_engagement(client, make_user, db_session):
     assert stats["posts"] == {"total": 1, "active": 1, "completed": 0}
     assert stats["engagements"]["received"] == 1
     assert len(stats["recent_posts"]) == 1
+
+
+# ---- launch audit (2026-09): don't hand out posts about to expire ----
+async def test_feed_hides_posts_inside_expiry_buffer(client, make_user, db_session):
+    """A post within EXPIRY_BUFFER_HOURS of POST_EXPIRY_HOURS is left out of
+    the feed: the expiry cron would cancel + refund it before the engager
+    could claim, leaving honest work unpaid."""
+    from datetime import timedelta
+
+    from app.core.time_utils import utcnow
+    from app.services import feed
+
+    owner = await make_user(telegram_id=7301)
+    _viewer = await make_user(telegram_id=7302)
+    # POST_EXPIRY_HOURS is unset in the test DB -> the service default (48h)
+    fresh = await _make_post(db_session, owner_id=owner.id, tweet_id="1")
+    old = await _make_post(
+        db_session, owner_id=owner.id, tweet_id="2",
+        created_at=utcnow() - timedelta(hours=48 - feed.EXPIRY_BUFFER_HOURS + 0.5),
+    )
+
+    r = await client.post("/session/start/", params={"telegram_id": 7302})
+    assert r.status_code == 200
+    ids = {p["id"] for p in r.json()["posts"]}
+    assert str(fresh.id) in ids
+    assert str(old.id) not in ids

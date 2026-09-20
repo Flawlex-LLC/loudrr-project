@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -96,4 +98,19 @@ class WaitlistEnrichmentResponse(BaseModel):
     score: float | None
     tier: str | None
     followers: list[str]  # bare X usernames, no '@', up to 10
-    followers_count: int  # 0 when followers is empty
+    # total smart followers when the provider knows it (>= len(followers)),
+    # else len(followers); 0 when followers is empty
+    followers_count: int
+    # "pending" = the sign-up fetch hasn't landed yet; "ready"; "not_found" =
+    # fetched, but the provider has no score for this account (yet)
+    score_status: Literal["pending", "ready", "not_found"] = "not_found"
+    score_updated_at: str | None = None  # last finished fetch, ISO
+
+
+# ---- POST /user/refresh-score/ ----
+class RefreshScoreResponse(WaitlistEnrichmentResponse):
+    # "updated" | "not_found" (no score from the provider; old one kept) |
+    # "cooldown" (refreshed recently — retry_after_seconds) | "unavailable"
+    # (provider backing off; nothing recorded, try later)
+    result: Literal["updated", "not_found", "cooldown", "unavailable"]
+    retry_after_seconds: int = 0

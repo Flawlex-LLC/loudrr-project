@@ -5,9 +5,10 @@ the viewer's own, not already engaged, and still has enough escrow to pay the
 viewer's tiered karma. Eligible posts are ranked by a weighted score
 (author tier + freshness + remaining escrow).
 """
+from datetime import datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select, func
+from sqlalchemy import or_, select, func
 
 from app.core.config import settings
 from app.core.time_utils import utcnow
@@ -25,7 +26,35 @@ async def _min_escrow(db, user: User) -> Decimal:
     return base * tier.multiplier_for(user.tweetscout_score or 0)
 
 
-def _eligible_query(user: User, min_escrow: Decimal, exclude_post_ids):
+# Stop handing out a post this close to its expiry. A click is only paid at
+# claim time, and the expiry cron cancels + refunds the post regardless of
+# unverified clicks on it — so an engagement made in the last stretch would
+# be honest work settled as "skipped_post_inactive" (unpaid, and the
+# engagement stays so the user can't even retry).
+EXPIRY_BUFFER_HOURS = 2
+
+
+async def _created_after(db) -> datetime:
+    """Posts created before this are within EXPIRY_BUFFER_HOURS of expiring."""
+    expiry_hours = float(await get_setting(db, "POST_EXPIRY_HOURS", 48))
+    return utcnow() - timedelta(hours=max(0.0, expiry_hours - EXPIRY_BUFFER_HOURS))
+
+
+def _not_own(user: User) -> list:
+    """Filters that hide the viewer's own posts. A sponsored account's posts
+    are owned by the platform user, so `user_id` never matches the sponsor's
+    own Loudrr account — match its verified X handle to the tweet author too
+    (else it could self-reply on its own sponsored posts for karma + XP)."""
+    filters = [Post.user_id != user.id]
+    if user.x_username:
+        filters.append(or_(
+            Post.platform != "sponsor",
+            func.lower(Post.tweet_author_username) != user.x_username.lower(),
+        ))
+    return filters
+
+
+def _eligible_query(user: User, min_escrow: Decimal, created_after: datetime, exclude_post_ids):
     """Active posts that can afford this user's karma, minus own/engaged/excluded."""
     engaged = select(Engagement.post_id).where(Engagement.user_id == user.id)
     q = (
@@ -33,7 +62,8 @@ def _eligible_query(user: User, min_escrow: Decimal, exclude_post_ids):
         .where(
             Post.status == "active",
             Post.escrow >= min_escrow,
-            Post.user_id != user.id,
+            Post.created_at > created_after,
+            *_not_own(user),
             Post.id.not_in(engaged),
         )
     )
@@ -92,8 +122,9 @@ async def author_map(db, posts) -> dict:
 async def get_feed_posts(db, user: User, *, limit: int = 100, exclude_post_ids=None):
     """Eligible posts, scored and sorted (highest first), capped at `limit`."""
     min_escrow = await _min_escrow(db, user)
+    created_after = await _created_after(db)
     rows = (
-        await db.execute(_eligible_query(user, min_escrow, exclude_post_ids))
+        await db.execute(_eligible_query(user, min_escrow, created_after, exclude_post_ids))
     ).scalars().all()
 
     # attach author tweetscout for scoring (one batched lookup)
@@ -102,18 +133,23 @@ async def get_feed_posts(db, user: User, *, limit: int = 100, exclude_post_ids=N
         author = amap.get(p.user_id)
         p._author_ts = (author[0].tweetscout_score if author else 0) or 0
 
-    scored = sorted(rows, key=lambda p: calculate_feed_score(p, user), reverse=True)
+    # sponsored posts always come first, then by score
+    scored = sorted(
+        rows, key=lambda p: (bool(p.is_sponsored), calculate_feed_score(p, user)), reverse=True,
+    )
     return scored[:limit]
 
 
 async def get_feed_count(db, user: User) -> int:
     """How many posts are eligible for this user to engage with."""
     min_escrow = await _min_escrow(db, user)
+    created_after = await _created_after(db)
     engaged = select(Engagement.post_id).where(Engagement.user_id == user.id)
     q = select(func.count()).select_from(Post).where(
         Post.status == "active",
         Post.escrow >= min_escrow,
-        Post.user_id != user.id,
+        Post.created_at > created_after,
+        *_not_own(user),
         Post.id.not_in(engaged),
     )
     return int((await db.execute(q)).scalar_one())
@@ -148,7 +184,13 @@ async def format_post(db, post: Post, viewer: User, *, author=None, x_profile=No
     else:
         hours_remaining = float(expiry_hours)
 
-    if x_profile:
+    if post.sponsor_id is not None or post.platform == "sponsor":
+        # sponsored account posts: the creator is the X account, not the
+        # platform user that holds the escrow
+        display_name = post.tweet_author_name or post.tweet_author_username or "Sponsored"
+        x_username = post.tweet_author_username or None
+        avatar_url = post.tweet_author_avatar or None
+    elif x_profile:
         display_name = (
             x_profile.display_name
             or (author.x_username if author else None)

@@ -89,8 +89,11 @@ def test_worker_settings_registered():
     # outbox durability: the stuck-outbox sweeper (mirrors requeue_stuck_batches
     # for OutboxEvent.status='processing' — same worker-crash class of bug).
     assert "requeue_stuck_outbox_events" in names
-    assert len(WorkerSettings.functions) == 11
+    # sign-up score fetch — on demand only; deliberately NOT a cron
+    assert "fetch_waitlist_score" in names
+    assert len(WorkerSettings.functions) == 12
     assert len(WorkerSettings.cron_jobs) == 9
+    assert not any("score" in job.name for job in WorkerSettings.cron_jobs)
 
 
 # ---- requeue_stuck_batches (service-audit P1: stuck-batch recovery) ----
@@ -366,3 +369,37 @@ async def test_decay_inactive_karma_disabled_when_rate_zero(make_user, db_sessio
     assert n == 0
     await db_session.refresh(user)
     assert user.credits == Decimal("1000")
+
+
+async def test_decay_compounds_daily_while_the_user_stays_inactive(make_user, db_session):
+    """The decay charge is our own row: counting it as activity re-armed the
+    14-day threshold, so an idle balance decayed once a fortnight."""
+    from sqlalchemy import update
+
+    from app.models.transaction import Transaction
+
+    await _seed_decay_settings(db_session)
+    user = await make_user(
+        credits=Decimal("100"), total_credits_earned=Decimal("100"),
+        created_at=utcnow() - timedelta(days=40),
+    )
+    assert await maintenance.decay_inactive_karma(db_session) == 1
+    await db_session.refresh(user)
+    after_first = user.credits
+    assert after_first < Decimal("100")
+
+    # ...it is now the next day: shift the existing rows (and yesterday's decay
+    # key, which is what stops a same-day re-run) back 24h
+    yesterday = (utcnow() - timedelta(days=1)).date().isoformat()
+    await db_session.execute(
+        update(Transaction).where(Transaction.user_id == user.id)
+        .values(
+            created_at=Transaction.created_at - timedelta(days=1),
+            idempotency_key=f"karma_decay:{user.id}:{yesterday}",
+        )
+    )
+    await db_session.commit()
+
+    assert await maintenance.decay_inactive_karma(db_session) == 1
+    await db_session.refresh(user)
+    assert user.credits < after_first

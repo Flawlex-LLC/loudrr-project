@@ -1,4 +1,6 @@
+import html
 import logging
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -43,10 +45,23 @@ async def cancel_mismatch(
 
 
 # ---- public OAuth callback (X redirects the browser here) ----
+# These pages run in the system browser, outside Telegram. They are never
+# cached, never send a Referer, and refuse to be framed (the confirm button must
+# not be clickjackable).
+_PAGE_HEADERS = {
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+}
+
+
 def _callback_html(title: str, message: str, success: bool = True) -> str:
     color = "#22c55e" if success else "#ef4444"
     accent = "#f95400"
     mark = "✓" if success else "!"
+    title = html.escape(title)
+    message = html.escape(message)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -71,6 +86,52 @@ def _callback_html(title: str, message: str, success: bool = True) -> str:
 </div></body></html>"""
 
 
+def _confirm_html(result) -> str:
+    """The page that names both accounts and asks the person who just
+    authorized on X to confirm. The one-time token lives only in this form's
+    hidden field — never in a URL, a log line or a Referer."""
+    x_handle = html.escape(result.x_username)
+    telegram = html.escape(result.telegram_label)
+    token = html.escape(result.confirm_token or "", quote=True)
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Confirm this connection — Loudrr</title>
+<style>
+  *{{box-sizing:border-box}}
+  body{{margin:0;background:#08080a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+       min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}}
+  .card{{max-width:420px;width:100%;background:linear-gradient(180deg,#0e0e10,#08080a);
+        border:1px solid rgba(255,255,255,0.1);border-radius:24px;padding:32px 24px;}}
+  h1{{margin:0 0 8px;font-size:22px;letter-spacing:-0.5px;text-align:center;}}
+  .sub{{margin:0 0 20px;color:rgba(255,255,255,0.65);font-size:14px;text-align:center;}}
+  .box{{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:16px;margin-bottom:16px;}}
+  .k{{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:rgba(255,255,255,0.45);}}
+  .v{{font-size:15px;font-weight:600;word-break:break-word;margin-top:2px;}}
+  .to{{text-align:center;font-size:12px;color:rgba(255,255,255,0.4);margin:12px 0;}}
+  .warn{{font-size:13px;color:rgba(255,255,255,0.6);line-height:1.5;margin:0 0 20px;}}
+  button{{width:100%;height:48px;border-radius:16px;font-size:15px;font-weight:600;cursor:pointer;}}
+  .yes{{background:rgba(249,84,0,0.22);border:1px solid rgba(249,84,0,0.5);color:#fff;margin-bottom:10px;}}
+  .no{{background:transparent;border:1px solid rgba(255,255,255,0.16);color:rgba(255,255,255,0.8);}}
+</style></head>
+<body><div class="card">
+  <h1>Confirm this connection</h1>
+  <p class="sub">You just authorized Loudrr on X. Check both accounts first.</p>
+  <div class="box">
+    <div class="k">X account</div><div class="v">@{x_handle}</div>
+    <div class="to">will be connected to</div>
+    <div class="k">Telegram account</div><div class="v">{telegram}</div>
+  </div>
+  <p class="warn">Only continue if that Telegram account is yours. If someone sent you this link,
+  press Cancel — confirming would hand <b>@{x_handle}</b> to their Loudrr account.</p>
+  <form method="post" action="/api/auth/x/confirm/">
+    <input type="hidden" name="token" value="{token}" />
+    <button class="yes" type="submit" name="decision" value="confirm">Yes, connect @{x_handle}</button>
+    <button class="no" type="submit" name="decision" value="cancel">Cancel — this wasn't me</button>
+  </form>
+</div></body></html>"""
+
+
 @router.get("/api/auth/x/callback/")
 @limiter.limit("30/minute")  # public unauthenticated endpoint — cap abuse
 async def x_oauth_callback(
@@ -91,9 +152,34 @@ async def x_oauth_callback(
             "We couldn't complete verification. Open Loudrr again to retry.",
             False, 500,
         )
+    if result.confirm_token:
+        return HTMLResponse(content=_confirm_html(result), status_code=200, headers=_PAGE_HEADERS)
     return HTMLResponse(
         content=_callback_html(result.title, result.message, result.success),
-        status_code=result.status_code,
+        status_code=result.status_code, headers=_PAGE_HEADERS,
+    )
+
+
+@router.post("/api/auth/x/confirm/")
+@limiter.limit("60/minute")  # public: the one-time token is the only credential
+async def x_oauth_confirm(request: Request, db=Depends(get_session)):
+    """The confirmation page's answer (a plain form post from the system
+    browser). ``confirm`` applies what X proved; ``cancel`` discards it."""
+    form = parse_qs((await request.body()).decode("utf-8", "replace"), max_num_fields=4)
+    token = (form.get("token") or [""])[0]
+    decision = (form.get("decision") or [""])[0]
+    try:
+        result = await svc.decide_confirmation(db, token=token, decision=decision)
+    except Exception:
+        logger.exception("x oauth confirm failed")
+        result = svc.CallbackResult(
+            "Something Went Wrong",
+            "We couldn't complete verification. Open Loudrr again to retry.",
+            False, 500,
+        )
+    return HTMLResponse(
+        content=_callback_html(result.title, result.message, result.success),
+        status_code=result.status_code, headers=_PAGE_HEADERS,
     )
 
 

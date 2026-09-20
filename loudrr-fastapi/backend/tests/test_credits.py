@@ -194,3 +194,44 @@ async def test_penalty_rejects_non_positive(db_session, make_user):
         await CreditService(db_session, user).apply_penalty(
             Decimal("0"), admin_id=uuid.uuid4(), idempotency_key="z"
         )
+
+# ---- the ledger keeps earned >= spent, so recycled karma stays spendable ----
+async def test_granted_karma_can_be_spent(db_session, make_user):
+    """A grant is the user's whole balance: spending it must not trip the DB's
+    earned_ge_spent check (it did — every post by a granted user 500'd)."""
+    user = await make_user(credits=Decimal("0"))
+    credits = CreditService(db_session, user)
+    await credits.admin_grant(Decimal("100"), admin_id=uuid.uuid4(), idempotency_key="g-spend")
+    await db_session.refresh(user)
+    assert user.total_credits_earned == Decimal("100")
+
+    await credits.spend(Decimal("40"), idempotency_key="s-granted")
+    await db_session.refresh(user)
+    assert user.credits == Decimal("60")
+    assert user.total_credits_spent == Decimal("40")
+
+
+async def test_refund_then_spend_again(db_session, make_user):
+    """Earn 10 -> post 10 -> post expires and refunds -> post again. The refund
+    un-counts the spend, so lifetime spent never outgrows lifetime earned."""
+    user = await make_user(credits=Decimal("0"))
+    credits = CreditService(db_session, user)
+    await credits.earn(Decimal("10"), idempotency_key="e1")
+    await credits.spend(Decimal("10"), idempotency_key="s1")
+    await credits.refund(Decimal("10"), idempotency_key="r1")
+    await db_session.refresh(user)
+    assert user.credits == Decimal("10")
+    assert user.total_credits_spent == Decimal("0")
+
+    await credits.spend(Decimal("10"), idempotency_key="s2")
+    await db_session.refresh(user)
+    assert user.credits == Decimal("0")
+    assert user.total_credits_spent == Decimal("10")
+
+
+async def test_refund_never_drives_spent_negative(db_session, make_user):
+    user = await make_user(credits=Decimal("5"), total_credits_earned=Decimal("5"))
+    await CreditService(db_session, user).refund(Decimal("50"), idempotency_key="r-big")
+    await db_session.refresh(user)
+    assert user.total_credits_spent == Decimal("0")
+    assert user.credits == Decimal("55")

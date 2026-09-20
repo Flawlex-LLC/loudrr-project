@@ -1,22 +1,21 @@
-import asyncio
-
 from fastapi import APIRouter, Depends, Request
 
 from app.core.deps import get_current_user, get_telegram_identity
-from app.core.limiter import limiter
+from app.core.errors import BadRequest
+from app.core.limiter import limiter, telegram_user_key
 from app.db.session import get_session
-from app.integrations.loudrr_analytics import get_score_client
 from app.models.user import User
 from app.repositories.user import UserRepository
 from app.repositories.waitlist import WaitlistRepository
 from app.schemas.user import (
     LinkXRequest,
     LinkXResponse,
+    RefreshScoreResponse,
     UserInfoResponse,
     UserStatsResponse,
     WaitlistEnrichmentResponse,
 )
-from app.services import tier as tier_svc
+from app.services import scores as scores_svc
 from app.services import users as svc
 
 # No prefix: these paths sit at the API root (the Next.js frontend proxies
@@ -68,17 +67,19 @@ async def waitlist_enrichment(
     tg_user: dict = Depends(get_telegram_identity),
     db=Depends(get_session),
 ):
-    """Best-effort enrichment for the miniapp waitlist-pending card.
+    """The caller's STORED score for the miniapp waitlist card.
 
     Primary use case is the waitlist-pending screen, so the caller may have
     a WaitlistEntry only (no User row yet) — we use get_telegram_identity
-    (not get_current_user) and resolve x_username from either table.
+    (not get_current_user) and resolve the handle from either table.
 
-    Never 500s: on any failure (no handle, analytics down, network error,
-    malformed payload) returns the empty shape.
+    Never calls the score provider: scores are fetched at sign-up and by
+    POST /user/refresh-score/ only. score_status "pending" means the sign-up
+    fetch hasn't landed yet (the screen polls briefly). Never 500s — no
+    handle / no record returns the empty shape.
     """
     empty = WaitlistEnrichmentResponse(
-        x_username=None, score=None, tier=None, followers=[], followers_count=0
+        x_username=None, score=None, tier=None, followers=[], followers_count=0,
     )
 
     tg_id = tg_user.get("id")
@@ -86,47 +87,29 @@ async def waitlist_enrichment(
         return empty
 
     # Approved user -> User row; still-waitlisted -> WaitlistEntry.
-    x_uname: str | None = None
     user = await UserRepository(db).get(telegram_id=tg_id)
-    if user is not None:
-        x_uname = user.x_username
-    else:
-        entry = await WaitlistRepository(db).get(telegram_id=tg_id)
-        if entry is not None:
-            x_uname = entry.x_username
-
-    x_uname = (x_uname or "").strip().lstrip("@")
+    entry = None if user is not None else await WaitlistRepository(db).get(telegram_id=tg_id)
+    owner = user or entry
+    x_uname = ((owner.x_username if owner else "") or "").strip().lstrip("@")
     if not x_uname:
         return empty
 
-    try:
-        client = get_score_client()
-        profile, top = await asyncio.gather(
-            client.get_user_data(x_uname),
-            client.get_top_followers(x_uname, k=10),
-        )
-    except Exception:
-        return empty
+    card = await scores_svc.stored_card(db, user=user, entry=entry)
+    return WaitlistEnrichmentResponse(x_username=x_uname, **card)
 
-    score: float | None = None
-    if profile and profile.get("score") is not None:
-        try:
-            score = float(profile["score"])
-        except (TypeError, ValueError):
-            score = None
 
-    followers: list[str] = []
-    for u in (top or []):
-        name = (u.get("username") or "").strip().lstrip("@")
-        if name and name not in followers:
-            followers.append(name)
-        if len(followers) >= 10:
-            break
-
-    return WaitlistEnrichmentResponse(
-        x_username=x_uname,
-        score=score,
-        tier=tier_svc.tier_for(score) if score is not None else None,
-        followers=followers,
-        followers_count=len(followers),
-    )
+@router.post("/user/refresh-score/", response_model=RefreshScoreResponse)
+# the per-account cooldown (SCORE_REFRESH_COOLDOWN_MINUTES) is the real limit;
+# this cap (per Telegram user — many users share IPs) only stops hammering
+@limiter.limit("30/hour", key_func=telegram_user_key)
+async def refresh_score(
+    request: Request,
+    tg_user: dict = Depends(get_telegram_identity),
+    db=Depends(get_session),
+):
+    """The mini-app "Refresh score" button — works for applicants and
+    approved users. Returns the card fields plus what happened (``result``)."""
+    tg_id = tg_user.get("id")
+    if not tg_id:
+        raise BadRequest("Missing Telegram ID")
+    return await scores_svc.refresh_score(db, telegram_id=tg_id)

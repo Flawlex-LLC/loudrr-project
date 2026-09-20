@@ -32,12 +32,17 @@ async def _get_pool():
     return _pool
 
 
-async def enqueue(task_name: str, *args) -> bool:
+async def enqueue(task_name: str, *args, job_id: str | None = None) -> bool:
+    """``job_id`` makes the enqueue idempotent: arq refuses a second job with
+    the same id while one is queued or running, so a request-path enqueue and
+    the stuck-batch sweeper can never run the same batch on two workers at
+    once. (The worker sets keep_result=0 so a *finished* job doesn't block a
+    later legitimate re-run under the same id.)"""
     if not (settings.use_task_queue and settings.redis_url):
         return False
     try:
         pool = await _get_pool()
-        await pool.enqueue_job(task_name, *args)
+        await pool.enqueue_job(task_name, *args, _job_id=job_id)
         return True
     except Exception as e:  # noqa: BLE001 — any failure → caller falls back
         logger.warning("arq enqueue failed for %s: %s", task_name, e)

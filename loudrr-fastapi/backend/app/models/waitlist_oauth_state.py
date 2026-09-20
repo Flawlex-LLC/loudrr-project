@@ -21,6 +21,12 @@ class WaitlistOAuthState(Base):
     state: Mapped[str] = mapped_column(String(64), primary_key=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     code_verifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Who pressed Connect X, from their verified initData ("@alice (Alice B)").
+    # The authorize URL can be forwarded to someone else, so the browser
+    # confirmation page shows this before an X account is linked to it.
+    telegram_label: Mapped[str] = mapped_column(
+        String(120), default="", server_default="", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         default=utcnow, server_default=text("now()"), nullable=False
     )

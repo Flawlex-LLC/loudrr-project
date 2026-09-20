@@ -1,3 +1,4 @@
+import os
 import uuid
 from decimal import Decimal
 
@@ -18,7 +19,9 @@ from app.services import site_settings
 # Same Postgres server as the app (and the Django project), but a SEPARATE
 # database so tests never touch real data. Create it once:
 #   CREATE DATABASE loudrr_test;
-TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/loudrr_test"
+# TEST_DATABASE_NAME lets two test runs work side by side on separate databases.
+TEST_DATABASE_NAME = os.environ.get("TEST_DATABASE_NAME", "loudrr_test")
+TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/" + TEST_DATABASE_NAME
 
 
 async def _discover_pg_enum_types(conn) -> list[str]:
@@ -69,14 +72,15 @@ def _reset_test_schema_once():
 
         url_for_asyncpg = TEST_DATABASE_URL.replace("+asyncpg", "")
         admin_url = url_for_asyncpg.rsplit("/", 1)[0] + "/postgres"
-        # 1. Terminate any orphan backends on loudrr_test from the
+        # 1. Terminate any orphan backends on the test DB from the
         # maintenance `postgres` db (you can't kill backends on the DB
         # you're connected to).
         admin = await connect(admin_url)
         try:
             await admin.execute(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname='loudrr_test' AND pid <> pg_backend_pid()"
+                "WHERE datname=$1 AND pid <> pg_backend_pid()",
+                TEST_DATABASE_NAME,
             )
         finally:
             await admin.close()
@@ -158,6 +162,34 @@ def make_user(db_session):
     return _make
 
 
+@pytest.fixture
+def confirmed_x_proof(db_session):
+    """Factory: ``await confirmed_x_proof(tg_id, "alice", "1")`` -> a signed
+    waitlist X proof plus its CONFIRMED server-side handoff row. That's what
+    the mini-app holds once the X account owner has confirmed the link in
+    their browser, and /waitlist/register/ refuses any proof without it."""
+    from sqlalchemy import delete
+
+    from app.core.crypto import sign_x_proof
+    from app.core.time_utils import utcnow
+    from app.models.waitlist_oauth_proof import WaitlistOAuthProof
+
+    async def _make(tg_id: int, username: str = "alice", x_user_id: str = "1") -> str:
+        proof = sign_x_proof({
+            "tg_id": tg_id, "x_username": username, "x_user_id": x_user_id,
+            "iat": int(utcnow().timestamp()),
+        })
+        await db_session.execute(
+            delete(WaitlistOAuthProof).where(WaitlistOAuthProof.telegram_id == tg_id)
+        )
+        db_session.add(WaitlistOAuthProof(
+            telegram_id=tg_id, proof=proof, confirmed_at=utcnow(),
+        ))
+        await db_session.commit()
+        return proof
+    return _make
+
+
 @pytest_asyncio.fixture
 async def client(db_session):
     """An httpx client wired to the real app, but pointed at the test session
@@ -176,3 +208,10 @@ async def client(db_session):
         yield c
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
+
+@pytest.fixture(autouse=True)
+def _no_sponsor_stream(monkeypatch):
+    """Never let a test start the real sponsor stream (worker.startup), even if a
+    developer's .env turns it on — it would poll the real gateway against the
+    dev database. Stream tests opt back in explicitly."""
+    monkeypatch.setattr(settings, "sponsor_stream_enabled", False)

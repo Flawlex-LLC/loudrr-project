@@ -23,7 +23,9 @@ async def queue_claim(
 ):
     async def schedule(batch_id):
         # prefer the arq queue (Ch16); fall back to in-process BackgroundTasks
-        if not await enqueue("process_verification_batch", str(batch_id)):
+        if not await enqueue(
+            "process_verification_batch", str(batch_id), job_id=f"verify:{batch_id}",
+        ):
             background.add_task(svc.process_batch_in_new_session, batch_id)
 
     body, status_code = await svc.queue_claim(db, user=user, schedule=schedule)

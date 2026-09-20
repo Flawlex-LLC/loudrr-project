@@ -3,6 +3,7 @@ double-spend under genuine concurrency (two parallel requests, real separate
 DB connections). Without the lock, both could read the old balance and oversell.
 """
 import asyncio
+import os
 import uuid
 from decimal import Decimal
 from types import SimpleNamespace
@@ -21,7 +22,11 @@ from app.services import site_settings
 from app.services import waitlist as waitlist_svc
 from app.services.credits import CreditService, InsufficientCreditsError
 
-TEST_DATABASE_URL = settings.database_url.rsplit("/", 1)[0] + "/loudrr_test"
+# the same database the db_session fixture built (conftest.py honors
+# TEST_DATABASE_NAME, so side-by-side runs don't race each other)
+TEST_DATABASE_URL = (
+    settings.database_url.rsplit("/", 1)[0] + "/" + os.environ.get("TEST_DATABASE_NAME", "loudrr_test")
+)
 
 
 class _FakeTwitter:
@@ -138,17 +143,11 @@ async def test_concurrent_submit_cannot_overspend(db_session, make_user, monkeyp
     assert active == 1                              # the rejected submit rolled its post back
 
 
-async def test_concurrent_waitlist_register_makes_one_entry(db_session, make_user):
+async def test_concurrent_waitlist_register_makes_one_entry(db_session, make_user, confirmed_x_proof):
     """The same telegram_id registering twice at once yields exactly one row —
     the unique constraint + the race re-query guarantee it (no duplicates)."""
-    from app.core.crypto import sign_x_proof
-    from app.core.time_utils import utcnow as _utcnow
-
     tg = {"id": 770_001, "username": "u", "first_name": "U"}
-    proof = sign_x_proof({
-        "tg_id": 770_001, "x_username": "dupuser", "x_user_id": "1",
-        "iat": int(_utcnow().timestamp()),
-    })
+    proof = await confirmed_x_proof(770_001, "dupuser", "1")
     payload = SimpleNamespace(
         x_proof=proof,
         region=None, niche=None, other_platforms=[], referral_code=None,

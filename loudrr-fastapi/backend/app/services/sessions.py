@@ -135,6 +135,13 @@ async def record_click(db, *, user, post_id) -> dict:
             raise NotFound("Post not found or no longer active")
         if post.user_id == user.id:
             raise BadRequest("Cannot engage with your own post")
+        # a sponsored post is owned by the platform user — the sponsor's own
+        # Loudrr account is matched by its X handle instead (see feed._not_own)
+        if (
+            post.platform == "sponsor" and user.x_username
+            and (post.tweet_author_username or "").lower() == user.x_username.lower()
+        ):
+            raise BadRequest("Cannot engage with your own post")
 
         repo = EngagementRepository(db)
         engagement = await repo.get(user_id=user.id, post_id=post.id)

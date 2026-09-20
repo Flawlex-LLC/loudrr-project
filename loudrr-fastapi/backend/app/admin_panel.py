@@ -39,6 +39,7 @@ from app.models.verification_batch import VerificationBatch
 from app.models.waitlist_entry import WaitlistEntry
 from app.models.x_verification_request import XVerificationRequest
 from app.services import admin as admin_svc
+from app.services.sponsors import PLATFORM_USER_ID
 from app.services import waitlist as waitlist_svc
 from app.services import x_verification as xverify_svc
 
@@ -131,6 +132,8 @@ class UserAdmin(ModelView, model=User):
         actor_id = await _panel_actor_id(request)
         async with SessionLocal() as db:
             for pk in _pks(request):
+                if str(pk) == str(PLATFORM_USER_ID):
+                    continue  # the sponsored-posts account, not a person
                 await admin_svc.ban_user(db, admin_id=actor_id, user_id=pk, reason="panel")
         return _back_to_list(request, self.identity)
 
@@ -143,6 +146,8 @@ class UserAdmin(ModelView, model=User):
         actor_id = await _panel_actor_id(request)
         async with SessionLocal() as db:
             for pk in _pks(request):
+                if str(pk) == str(PLATFORM_USER_ID):
+                    continue
                 await admin_svc.unban_user(db, admin_id=actor_id, user_id=pk)
         return _back_to_list(request, self.identity)
 
@@ -268,8 +273,13 @@ class OutboxAdmin(ModelView, model=OutboxEvent):
 class SiteSettingAdmin(ModelView, model=SiteSetting):
     name_plural = "Site Settings"
     column_list = [SiteSetting.key, SiteSetting.value, SiteSetting.data_type]
-    # editable — operational config (post-cost range etc.) is what admins
-    # actually need to tune from the panel
+    # READ-ONLY on purpose. Editing here wrote raw strings with no type
+    # coercion, no key whitelist, no audit row and no cache bust — so
+    # POST_COST_MIN could become "banana", and the running app would keep
+    # serving the cached old value while this panel showed the new one.
+    # PUT /api/admin/site-settings/{key}/ (superadmin, validated, audited,
+    # cache-busting) is the only way to change the money math.
+    can_create = can_edit = can_delete = False
 
 
 class FeatureInterestAdmin(ModelView, model=FeatureInterest):

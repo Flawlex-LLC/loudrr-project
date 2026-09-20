@@ -7,6 +7,8 @@ traffic happens. Coverage targets:
   * TwitterClient.get_tweet_content — success, malformed JSON, 404 empty list,
     HTTP error, no-key, media extraction fallbacks
 """
+import uuid
+
 import httpx
 import pytest
 
@@ -450,3 +452,34 @@ class TestGatewayRouting:
 
         client = TwitterClient()
         assert client.base_url == "https://gateway.loudrr.com/twitter"
+
+
+# ---- launch audit (2026-09): a broken gateway key is a HOLD, not a pass ----
+class TestVerifyReplyUnavailable:
+    @pytest.mark.parametrize("status", [401, 402, 403])
+    async def test_credential_errors_report_unavailable(self, monkeypatch, status):
+        def script(url, headers, params):
+            return _FakeResponse(status, {}, text="nope")
+        _patch_httpx(monkeypatch, script)
+
+        client = TwitterClient(api_key="key")
+        result = await client.verify_reply("123", "alice")
+        assert result["unavailable"] is True
+        assert result["passed"] is False
+        assert result["skipped"] is False
+        assert str(status) in result["error"]
+
+    async def test_unavailable_raises_in_phase_one(self, monkeypatch):
+        """verify_engagements surfaces it as VerificationUnavailable so the
+        batch is parked instead of settled."""
+        from app.services import verification
+
+        def script(url, headers, params):
+            return _FakeResponse(401, {}, text="bad key")
+        _patch_httpx(monkeypatch, script)
+        monkeypatch.setattr(
+            verification.twitter, "get_twitter_client", lambda: TwitterClient(api_key="key"),
+        )
+        items = [verification.ToVerify(uuid.uuid4(), uuid.uuid4(), "123")]
+        with pytest.raises(verification.VerificationUnavailable):
+            await verification.verify_engagements(items, "alice")

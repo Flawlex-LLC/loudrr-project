@@ -3,10 +3,12 @@
 Covers POST /waitlist/x-oauth/start/ + GET /api/auth/x/callback/waitlist/,
 and the itsdangerous proof round-trip. Reuses the _FakeAsyncClient
 scaffolding pattern from test_integrations_x_oauth.py to stub the two
-outbound HTTP calls (token exchange + /users/me).
+outbound HTTP calls (token exchange + /users/me). The browser confirmation
+step has its own file: test_waitlist_oauth_confirm.py.
 """
+import hashlib
 from datetime import timedelta
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 import pytest
 from sqlalchemy import select
@@ -52,7 +54,7 @@ def test_verify_and_extract_rejects_malformed_proof():
     # own callback would never mint. Signature passes, shape check must fail.
     token = sign_x_proof({"tg_id": 7, "x_user_id": "9"})
     with pytest.raises(BadRequest, match="Malformed X OAuth proof"):
-        waitlist_oauth_svc.verify_and_extract(token, telegram_id=7)
+        waitlist_oauth_svc._verify_and_extract(token, telegram_id=7)
 
 
 # --------------------------------------------------------------------------
@@ -110,6 +112,9 @@ async def test_start_oauth_returns_authorize_url(client, db_session, monkeypatch
         )
     ).scalars().all()
     assert len(rows) == 1
+    # ...naming who started it, for the browser confirmation page (the debug
+    # identity here; test_waitlist_oauth_confirm.py covers real initData)
+    assert rows[0].telegram_label == "@Oxblest (Oxblest)"
 
 
 async def test_start_oauth_not_configured_503(client, monkeypatch):
@@ -179,7 +184,7 @@ async def _seed_state(db_session, *, telegram_id: int, state: str = "s0") -> Non
     await db_session.commit()
 
 
-async def test_callback_valid_state_302s_with_proof(client, db_session, monkeypatch):
+async def test_callback_valid_state_stores_unconfirmed_proof_and_302s_to_confirm(client, db_session, monkeypatch):
     monkeypatch.setattr(x_oauth.settings, "x_oauth_client_id", "cid")
     monkeypatch.setattr(x_oauth.settings, "x_oauth_client_secret", "sec")
     monkeypatch.setattr(x_oauth.settings, "x_oauth_callback_url", "https://cb/")
@@ -199,13 +204,31 @@ async def test_callback_valid_state_302s_with_proof(client, db_session, monkeypa
         follow_redirects=False,
     )
     assert r.status_code == 302
-    loc = r.headers["location"]
-    assert loc.startswith("https://app.example.com/waitlist/oauth-return?proof=")
-    proof = loc.split("proof=", 1)[1]
-    payload = verify_x_proof(proof)
+    # the browser goes to the confirmation page with a one-time token; the
+    # proof never travels in the browser URL (history, logs, analytics)
+    location = urlparse(r.headers["location"])
+    assert (location.scheme, location.netloc, location.path) == (
+        "https", "app.example.com", "/waitlist/oauth-return",
+    )
+    # the one-time token rides the FRAGMENT, which browsers never send to a
+    # server (no access log, no Referer, no analytics tag)
+    assert not location.query, r.headers["location"]
+    fragment = parse_qs(location.fragment)
+    assert list(fragment) == ["confirm"]
+    token = fragment["confirm"][0]
+    assert len(token) >= 43
+    stored = await db_session.get(WaitlistOAuthProof, 555)
+    assert stored.proof not in r.headers["location"]
+    payload = verify_x_proof(stored.proof)
     assert payload["tg_id"] == 555
     assert payload["x_username"] == "alice"
     assert payload["x_user_id"] == "999"
+    assert stored.error is None
+    # stored UNCONFIRMED, holding only the token's hash
+    assert stored.confirmed_at is None
+    assert stored.confirm_token_hash == hashlib.sha256(token.encode()).hexdigest()
+    # a state row from before labels existed falls back to the Telegram id
+    assert stored.telegram_label == "Telegram user 555"
 
     # state row consumed
     remaining = (
@@ -269,15 +292,22 @@ async def test_callback_token_exchange_fails_302s_error(client, db_session, monk
 # --------------------------------------------------------------------------
 # GET /waitlist/x-oauth/proof/ — server-side proof handoff for Telegram WebView
 # --------------------------------------------------------------------------
+EMPTY_POLL = {
+    "proof": None, "x_username": None, "expires_in": None, "error": None,
+    "awaiting_confirmation": False,
+}
+
+
 async def test_proof_poll_no_row_returns_null(client):
     r = await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 555})
     assert r.status_code == 200
-    assert r.json() == {"proof": None}
+    assert r.json() == EMPTY_POLL
 
 
-async def test_proof_poll_after_callback_returns_proof_once(client, db_session, monkeypatch):
-    """The callback upserts the proof server-side; the poll endpoint hands it
-    out exactly once (atomic DELETE ... RETURNING), then null again."""
+async def test_proof_poll_returns_proof_until_registration(client, db_session, monkeypatch):
+    """The poll is NOT destructive: a dropped response or a WebView restart
+    must not cost the applicant another trip to X. It also carries the
+    verified handle, so the frontend never decodes the (compressed) token."""
     monkeypatch.setattr(x_oauth.settings, "x_oauth_client_id", "cid")
     monkeypatch.setattr(x_oauth.settings, "x_oauth_client_secret", "sec")
     monkeypatch.setattr(x_oauth.settings, "x_oauth_callback_url", "https://cb/")
@@ -295,21 +325,28 @@ async def test_proof_poll_after_callback_returns_proof_once(client, db_session, 
         follow_redirects=False,
     )
     assert r.status_code == 302
-    minted = r.headers["location"].split("proof=", 1)[1]
+    # withheld until the browser that authorized confirms the link
+    waiting = (await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 555})).json()
+    assert waiting == EMPTY_POLL | {"awaiting_confirmation": True}
+    token = parse_qs(urlparse(r.headers["location"]).fragment)["confirm"][0]
+    confirmed = await client.post("/waitlist/x-oauth/confirm/", json={"token": token, "decision": "confirm"})
+    assert confirmed.status_code == 200
 
-    # first poll: the stored proof, identical to the one in the redirect
-    r1 = await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 555})
-    assert r1.status_code == 200
-    assert r1.json()["proof"] == minted
-    payload = verify_x_proof(r1.json()["proof"])
-    assert payload["tg_id"] == 555
+    r1 = (await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 555})).json()
+    assert verify_x_proof(r1["proof"])["tg_id"] == 555
+    assert r1["x_username"] == "alice"
+    assert 590 <= r1["expires_in"] <= 600
+    assert r1["error"] is None
+    assert r1["awaiting_confirmation"] is False
+    # still there on the next poll
+    r2 = (await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 555})).json()
+    assert r2["proof"] == r1["proof"]
+    # another Telegram user never sees it
+    other = (await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 556})).json()
+    assert other == EMPTY_POLL
 
-    # second poll: consumed — null
-    r2 = await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 555})
-    assert r2.json() == {"proof": None}
 
-
-async def test_proof_poll_stale_row_returns_null(client, db_session):
+async def test_proof_poll_stale_row_reports_expired_once(client, db_session):
     # a row older than PROOF_TTL_SECONDS is dead — the register endpoint
     # would reject the token anyway, so the poll must not hand it out
     db_session.add(WaitlistOAuthProof(
@@ -320,7 +357,44 @@ async def test_proof_poll_stale_row_returns_null(client, db_session):
     await db_session.commit()
     r = await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 777})
     assert r.status_code == 200
-    assert r.json() == {"proof": None}
+    assert r.json() == EMPTY_POLL | {"error": "expired"}
+    r = await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 777})
+    assert r.json() == EMPTY_POLL
+
+
+async def test_denied_on_x_reaches_the_polling_mini_app(client, db_session, monkeypatch):
+    """The failure used to live only in the SYSTEM browser's URL, leaving the
+    mini-app on "Waiting for X…" forever."""
+    monkeypatch.setattr(x_oauth.settings, "miniapp_url", "https://app.example.com/app")
+    await _seed_state(db_session, telegram_id=901, state="deny-state")
+    r = await client.get(
+        "/api/auth/x/callback/waitlist/",
+        params={"error": "access_denied", "state": "deny-state"},
+        follow_redirects=False,
+    )
+    assert "error=denied" in r.headers["location"]
+    polled = (await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 901})).json()
+    assert polled == EMPTY_POLL | {"error": "denied"}
+    # reported once — the next Connect X starts clean
+    again = (await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 901})).json()
+    assert again == EMPTY_POLL
+
+
+async def test_expired_state_reaches_its_mini_app(client, db_session, monkeypatch):
+    monkeypatch.setattr(x_oauth.settings, "miniapp_url", "https://app.example.com/app")
+    db_session.add(WaitlistOAuthState(
+        state="old-state", telegram_id=902, code_verifier="v" * 43,
+        expires_at=utcnow() - timedelta(minutes=1),
+    ))
+    await db_session.commit()
+    r = await client.get(
+        "/api/auth/x/callback/waitlist/",
+        params={"code": "c", "state": "old-state"},
+        follow_redirects=False,
+    )
+    assert "error=expired" in r.headers["location"]
+    polled = (await client.get("/waitlist/x-oauth/proof/", params={"telegram_id": 902})).json()
+    assert polled["error"] == "expired"
 
 
 async def test_callback_fetch_me_fails_302s_error(client, db_session, monkeypatch):

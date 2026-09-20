@@ -21,9 +21,9 @@ from app.models.user import User
 from app.models.verification_batch import BatchStatus, VerificationBatch
 from app.integrations.twitter import extract_tweet_id
 from app.repositories.verification_batch import VerificationBatchRepository
-from app.services import settlement, verification
+from app.services import kill_switches, settlement, tier, verification
 from app.services.site_settings import get_setting
-from app.services.verification import ToVerify
+from app.services.verification import ToVerify, VerificationUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +42,46 @@ async def queue_claim(db, *, user, schedule) -> tuple[dict, int]:
     """Returns (body, http_status). `schedule(batch_id)` enqueues processing."""
     if user.is_banned:
         raise Forbidden("Your account has been suspended")
+
+    # admin kill switch — no NEW batches; batches already queued keep settling
+    blocked = await kill_switches.blocked_reason(
+        db, kill_switches.CLAIMS_ENABLED,
+        "Claiming is paused right now. Your engagements are saved — try again shortly.",
+    )
+    if blocked:
+        return (
+            {"success": False, "error": "claims_disabled", "message": blocked,
+             "pending_count": await _pending_count(db, user.id)},
+            503,
+        )
+
     if not user.x_username:
         return (
             {"success": False, "error": "x_account_required",
              "message": "Please link your X account before claiming rewards."},
             400,
+        )
+
+    # One batch in flight per user. A second claim while the first is still
+    # verifying would snapshot the same engagements twice: double Twitter
+    # spend, a confusing "0 karma for 10 engagements" second card, and the
+    # honesty penalty for any failures applied twice.
+    inflight_own = (
+        await db.execute(
+            select(func.count())
+            .select_from(VerificationBatch)
+            .where(
+                VerificationBatch.user_id == user.id,
+                VerificationBatch.status.in_(["pending", "processing"]),
+            )
+        )
+    ).scalar_one()
+    if inflight_own:
+        return (
+            {"success": False, "error": "batch_in_flight",
+             "message": "Your previous claim is still being verified. Hang tight!",
+             "pending_count": await _pending_count(db, user.id)},
+            200,
         )
 
     min_to_claim = await get_setting(db, "MIN_ENGAGEMENTS_TO_CLAIM", 10)
@@ -186,6 +221,10 @@ async def run_batch(db, batch_id) -> dict:
 
     batch.status = BatchStatus.PROCESSING.value
     await db.commit()
+    # Settlement multiplies by the tier's multiplier. This runs in the worker
+    # process, which never sees the API process's in-memory reload after an
+    # admin retune — re-read the bands (site settings are cached ~5 min).
+    await tier.load_tiers_from_settings(db)
 
     try:
         user = await db.get(User, batch.user_id)
@@ -248,6 +287,18 @@ async def run_batch(db, batch_id) -> dict:
                 f"{failed} failed verification."
             )
         return await _finish(db, batch, passed=passed, failed=failed, awarded=awarded, message=message)
+
+    except VerificationUnavailable as exc:
+        # Our gateway key/credits are broken. Nothing was settled (Phase 1
+        # raised before Phase 2), so park the batch as PENDING: the user keeps
+        # their engagements, no karma moves, and requeue_stuck_batches picks
+        # it up again once it is older than its cutoff. Loud in the logs on
+        # purpose — this needs a human.
+        logger.error("[VERIFY] batch %s held — %s", batch_id, exc)
+        batch.status = BatchStatus.PENDING.value
+        batch.message = "Verification is temporarily unavailable. We'll retry automatically."
+        await db.commit()
+        return {"status": batch.status, "held": True, "error": str(exc)}
 
     except Exception as exc:  # mark failed; idempotency keys make a re-run safe
         logger.exception("[VERIFY] batch %s failed", batch_id)

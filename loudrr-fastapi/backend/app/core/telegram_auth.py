@@ -8,6 +8,10 @@ from urllib.parse import parse_qsl
 def verify_init_data(init_data: str, bot_token: str) -> dict:
     """Verify TG webapp init data, returns the TG user data as dict if valid,
     or raises ValueError if sign or expiry check fails."""
+    # an empty bot token makes the HMAC key public — anyone could sign
+    # initData for any user. Fail closed.
+    if not bot_token:
+        raise ValueError("Telegram bot token not configured")
     pairs = dict(parse_qsl(init_data, keep_blank_values=True))
 
     received_hash = pairs.pop("hash", None)

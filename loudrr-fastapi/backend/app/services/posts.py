@@ -17,6 +17,7 @@ from app.models.post import Post
 from app.models.user import User
 from app.repositories.post import PostRepository
 from app.repositories.x_profile import XProfileRepository
+from app.services import kill_switches
 from app.services.credits import CreditService, InsufficientCreditsError
 from app.services.site_settings import get_setting
 
@@ -97,6 +98,13 @@ def _parse_tweet_dt(value: str):
 async def submit_post(db, *, user, x_link: str, karma_amount=None) -> dict:
     if user.is_banned:
         raise Forbidden("Your account has been suspended")
+
+    # admin kill switch — refuse new submissions before we spend a Twitter
+    # call or lock any karma (existing posts keep running)
+    await kill_switches.require_enabled(
+        db, kill_switches.POSTS_ENABLED,
+        "Posting is paused right now. Your karma is untouched — try again shortly.",
+    )
 
     x_link = (x_link or "").strip()
     if not x_link:

@@ -8,6 +8,7 @@ import uuid
 from datetime import timedelta
 from decimal import Decimal
 
+from sqlalchemy import func, select
 
 from app.core.time_utils import utcnow
 from app.integrations import twitter
@@ -729,3 +730,66 @@ async def test_claim_history_lists_batches(client, make_user, db_session):
     assert len(body["batches"]) == 1
     assert body["batches"][0]["status"] == "pending"
     assert body["has_processing"] is True
+
+
+# ============ launch audit (2026-09): claim hardening ============
+async def test_queue_refuses_while_batch_in_flight(client, make_user, db_session):
+    """A second claim while the first is still verifying must not snapshot
+    the same engagements into a second batch."""
+    owner = await make_user(telegram_id=9101)
+    user = await make_user(telegram_id=9102, x_username="alice")
+    db_session.add_all([
+        SiteSetting(key="MIN_ENGAGEMENTS_TO_CLAIM", value="1", data_type="int"),
+        SiteSetting(key="MIN_SESSION_DURATION_SECONDS", value="0", data_type="int"),
+    ])
+    await db_session.commit()
+    site_settings._cache.clear()
+    post = await _make_post(db_session, owner_id=owner.id)
+    eng = await _make_engagement(db_session, user_id=user.id, post_id=post.id)
+    await _make_batch(db_session, user_id=user.id, engagement_ids=[eng.id])  # in flight
+
+    r = await client.post("/session/queue-claim/", params={"telegram_id": 9102})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is False
+    assert body["error"] == "batch_in_flight"
+    assert body["pending_count"] == 1
+    n = (await db_session.execute(
+        select(func.count()).select_from(VerificationBatch)
+        .where(VerificationBatch.user_id == user.id)
+    )).scalar_one()
+    assert n == 1  # no second batch
+
+
+class _UnavailableTwitter:
+    async def verify_reply(self, tweet_id, x_username, *, max_retries=0):
+        return {"passed": False, "reply_verified": False, "like_verified": True,
+                "error": "verification unavailable: 401", "skipped": False,
+                "unavailable": True}
+
+
+async def test_verification_unavailable_holds_batch_and_pays_nothing(
+    make_user, db_session, monkeypatch,
+):
+    """A rejected gateway key is OUR outage, not the user's: the batch goes
+    back to PENDING (for the sweeper), the engagement stays pending, and no
+    karma or escrow moves. Before this, any 4xx paid the whole batch out."""
+    monkeypatch.setattr(twitter, "get_twitter_client", lambda: _UnavailableTwitter())
+    owner = await make_user(telegram_id=9111)
+    user = await make_user(telegram_id=9112, x_username="alice")
+    post = await _make_post(db_session, owner_id=owner.id, escrow="50")
+    eng = await _make_engagement(db_session, user_id=user.id, post_id=post.id)
+    batch = await _make_batch(db_session, user_id=user.id, engagement_ids=[eng.id])
+
+    out = await claims.run_batch(db_session, batch.id)
+    assert out.get("held") is True
+
+    await db_session.refresh(batch)
+    await db_session.refresh(eng)
+    await db_session.refresh(post)
+    await db_session.refresh(user)
+    assert batch.status == "pending"
+    assert "temporarily unavailable" in batch.message
+    assert eng.verified is False and eng.credit_granted is False
+    assert post.escrow == Decimal("50")
+    assert user.credits == Decimal("0")

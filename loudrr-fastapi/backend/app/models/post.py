@@ -42,6 +42,11 @@ class Post(Base):
     tweet_created_at: Mapped[datetime | None] = mapped_column(default=None)
 
     is_sponsored: Mapped[bool] = mapped_column(default=False, server_default="false")
+    # set on posts imported from a monitored sponsor account (platform
+    # "sponsor"); those are owned by the platform user, not a real poster
+    sponsor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sponsored_accounts.id", ondelete="SET NULL"), default=None, index=True
+    )
 
     redirect_token: Mapped[str] = mapped_column(
         String(32), unique=True, index=True, default=generate_redirect_token
@@ -81,6 +86,12 @@ class Post(Base):
         ),
         Index("ix_posts_status_created", "status", "created_at"),
         Index("ix_posts_user_created", "user_id", "created_at"),
+        # one sponsored post per tweet, ever — the stream, the reconnect
+        # catch-up and a second worker can all deliver the same tweet
+        Index(
+            "uq_posts_sponsor_tweet", "tweet_id", unique=True,
+            postgresql_where=text("platform = 'sponsor'"),
+        ),
     )
 
     # ---- computed (not stored) ----

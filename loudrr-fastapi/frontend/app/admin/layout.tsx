@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { usePathname } from 'next/navigation';
-import Link from 'next/link';
 import { Toaster } from 'sonner';
 import {
   ChevronLeft,
@@ -22,6 +21,7 @@ import {
 
 import { Sidebar, type SidebarItem } from '@/components/admin/Sidebar';
 import { TopBar } from '@/components/admin/TopBar';
+import { adminApi } from '@/lib/api';
 import { Button } from '@/components/admin/Button';
 import {
   AdminSessionProvider,
@@ -100,6 +100,9 @@ function breadcrumbFromPathname(pathname: string): string[] {
 }
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  // the sign-in page is outside the gate — it's how you get past it
+  if (pathname === '/admin/login') return <>{children}</>;
   // The provider owns /me/ and the queue counts; AdminShell consumes them.
   return (
     <AdminSessionProvider>
@@ -205,6 +208,13 @@ function AdminShell({ children }: { children: React.ReactNode }) {
     return <GateScreen icon={<Loader2 size={22} className="animate-spin text-[#f95400]" />} title="Checking access…" body="Verifying your admin role with the Loudrr backend." />;
   }
 
+  if (status === 'signedOut') {
+    if (typeof window !== 'undefined') {
+      window.location.replace(`/admin/login?next=${encodeURIComponent(pathname)}`);
+    }
+    return <GateScreen icon={<Loader2 size={22} className="animate-spin text-[#f95400]" />} title="Sign in to continue" body="Taking you to the admin sign-in page…" />;
+  }
+
   if (status === 'forbidden') {
     return (
       <GateScreen
@@ -213,12 +223,15 @@ function AdminShell({ children }: { children: React.ReactNode }) {
         body="The Loudrr admin panel is limited to accounts with an admin or superadmin role. If you think that's wrong, ask a superadmin to grant the role, then reload."
         action={
           <div className="flex flex-wrap justify-center gap-2">
-            <Button variant="secondary" onClick={reload}>
-              <RefreshCw size={14} /> Retry
+            <Button
+              variant="secondary"
+              onClick={async () => {
+                await adminApi.logout().catch(() => undefined);
+                window.location.replace('/admin/login');
+              }}
+            >
+              Sign in with another account
             </Button>
-            <Link href="/">
-              <Button variant="ghost">Back to Loudrr</Button>
-            </Link>
           </div>
         }
       />
@@ -277,6 +290,10 @@ function AdminShell({ children }: { children: React.ReactNode }) {
           breadcrumb={breadcrumb}
           onMenuClick={() => setMobileNavOpen(true)}
           menuOpen={mobileNavOpen}
+          onSignOut={async () => {
+            await adminApi.logout().catch(() => undefined);
+            window.location.replace('/admin/login');
+          }}
         />
         {/* overflow-x-auto (not hidden) so a page whose table is genuinely
             wider than the viewport can still be reached by swiping, even if

@@ -49,7 +49,7 @@ const EMPTY_QUEUES: QueueCounts = {
  * `forbidden` — authenticated but no admin role (or the API said 401/403).
  * `error`     — the call failed for another reason (network, 500); retryable.
  */
-export type AdminSessionStatus = 'loading' | 'ready' | 'forbidden' | 'error';
+export type AdminSessionStatus = 'loading' | 'ready' | 'signedOut' | 'forbidden' | 'error';
 
 export interface AdminSessionValue {
   me: AdminMe | null;
@@ -99,9 +99,10 @@ export function AdminSessionProvider({ children }: { children: React.ReactNode }
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : 'Failed to verify admin access';
         setMe(null);
-        // adminApiRequest throws "<status>: <detail>" — 401/403 is a real
-        // "you're not an admin", anything else is an outage worth retrying.
-        setStatus(/^(401|403)\b/.test(msg) ? 'forbidden' : 'error');
+        // adminApiRequest throws "<status>: <detail>": 401 = not signed in
+        // (go to the login page), 403 = signed in but not an admin, anything
+        // else is an outage worth retrying.
+        setStatus(/^401\b/.test(msg) ? 'signedOut' : /^403\b/.test(msg) ? 'forbidden' : 'error');
         setError(msg);
       }
     })();

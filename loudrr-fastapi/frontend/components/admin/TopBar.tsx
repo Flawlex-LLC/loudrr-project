@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronRight, ExternalLink, Menu } from 'lucide-react';
+import { ChevronRight, ExternalLink, Menu, LogOut } from 'lucide-react';
 
 interface TopBarProps {
   breadcrumb: string[];
@@ -8,6 +8,8 @@ interface TopBarProps {
   onMenuClick?: () => void;
   /** Drawer state, for `aria-expanded` on the hamburger. */
   menuOpen?: boolean;
+  /** Ends the admin website session. */
+  onSignOut?: () => void;
 }
 
 /**
@@ -23,7 +25,7 @@ const DOCS_URL = `${(process.env.NEXT_PUBLIC_ADMIN_API_URL || 'http://localhost:
   '',
 )}/docs`;
 
-export function TopBar({ breadcrumb, onMenuClick, menuOpen = false }: TopBarProps) {
+export function TopBar({ breadcrumb, onMenuClick, menuOpen = false, onSignOut }: TopBarProps) {
   return (
     <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-white/[0.06] bg-[#0a0a0a]/85 px-4 backdrop-blur lg:gap-4 lg:px-6">
       {/* Hamburger — the only way to reach navigation under `lg`. */}
@@ -75,6 +77,16 @@ export function TopBar({ breadcrumb, onMenuClick, menuOpen = false }: TopBarProp
           </a>
         )}
         <div className="hidden text-[11px] text-zinc-500 md:block">All actions audit-logged</div>
+        {onSignOut && (
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-1.5 text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.05] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f95400]/40"
+          >
+            <LogOut size={12} aria-hidden />
+            <span>Sign out</span>
+          </button>
+        )}
       </div>
     </header>
   );

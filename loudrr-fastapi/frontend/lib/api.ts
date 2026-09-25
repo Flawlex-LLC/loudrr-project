@@ -738,11 +738,12 @@ async function adminApiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const initData = getTelegramInitData();
-
+  // The admin panel is a website: identity is the session cookie from the
+  // Telegram Login Widget (sent automatically, same origin). The custom header
+  // is the backend's CSRF check — a cross-site form can't set it.
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
-    ...(initData && { 'X-Telegram-Init-Data': initData }),
+    'X-Requested-With': 'loudrr-admin',
     ...options.headers,
   };
 
@@ -1404,6 +1405,13 @@ export const adminApi = {
       telegram_username: string;
       role: 'admin' | 'superadmin' | '';
     }>(`/me/`),
+
+  // ---- website sign-in (Telegram Login Widget) ----
+  authConfig: () => adminApiRequest<{ bot_username: string }>(`/auth/config/`),
+  telegramLogin: (payload: Record<string, unknown>) =>
+    adminApiRequest<{ ok: boolean; role: string; telegram_username: string }>(
+      `/auth/telegram/`, { method: 'POST', body: JSON.stringify(payload) }),
+  logout: () => adminApiRequest<{ ok: boolean }>(`/auth/logout/`, { method: 'POST', body: '{}' }),
 
   getStats: () => adminApiRequest<AdminStats>(`/stats/`),
 

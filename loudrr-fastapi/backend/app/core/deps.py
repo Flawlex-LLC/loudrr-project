@@ -1,4 +1,6 @@
-from fastapi import Header, HTTPException, Depends, Query
+import uuid
+
+from fastapi import Header, HTTPException, Depends, Query, Request
 from sqlalchemy import select
 from app.core.telegram_auth import verify_init_data
 from app.core.config import settings
@@ -34,15 +36,54 @@ async def get_current_user(
     return user
 
 
-# ---- RBAC: admin gates (build on the authenticated user + their role) ----
-async def require_admin(user: User = Depends(get_current_user)) -> User:
-    """Authenticated user with the 'admin' or 'superadmin' role (Forbidden→403)."""
+# ---- the admin website's identity ----
+async def get_admin_user(
+    request: Request,
+    db=Depends(get_session),
+    telegram_id: int | None = Query(default=None),
+) -> User:
+    """Who is using the admin website.
+
+    The admin panel is a normal website, not part of the Telegram mini-app:
+    identity is the session cookie set by the Telegram Login Widget
+    (api/admin_auth.py). Mini-app initData does NOT open admin routes — inside
+    Telegram an admin is just a user.
+    """
+    from app.core import admin_session
+
+    if settings.debug and telegram_id is not None:  # dev/test bypass only
+        user = await db.scalar(select(User).where(User.telegram_id == telegram_id))
+        if user is None:
+            raise HTTPException(status_code=401, detail="user not found")
+        return user
+
+    session = admin_session.read(request.cookies.get(admin_session.COOKIE_NAME))
+    if session is None:
+        raise HTTPException(status_code=401, detail="Sign in to the admin panel")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and (
+        request.headers.get(admin_session.CSRF_HEADER) != admin_session.CSRF_VALUE
+    ):
+        raise HTTPException(status_code=403, detail="Missing admin request header")
+    try:
+        user = await db.get(User, uuid.UUID(str(session["uid"])))
+    except ValueError:
+        user = None
+    if user is None or user.telegram_id != session.get("tg") or user.is_banned:
+        raise HTTPException(status_code=401, detail="Sign in to the admin panel")
+    return user
+
+
+# ---- RBAC: admin gates (build on the admin identity + their role) ----
+async def require_admin(user: User = Depends(get_admin_user)) -> User:
+    """Signed-in admin website user with the 'admin' or 'superadmin' role
+    (Forbidden→403). The role is re-read on every request, so a demotion takes
+    effect on the next click."""
     if user.role not in ("admin", "superadmin"):
         raise Forbidden("Admin access required")
     return user
 
 
-async def require_superadmin(user: User = Depends(get_current_user)) -> User:
+async def require_superadmin(user: User = Depends(get_admin_user)) -> User:
     """Authenticated user with the 'superadmin' role — for the most sensitive
     operations (e.g. revoking credits), matching the Django superuser gate."""
     if user.role != "superadmin":

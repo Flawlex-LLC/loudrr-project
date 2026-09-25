@@ -20,6 +20,17 @@ const nextConfig: NextConfig = {
       { protocol: 'https', hostname: '*.twimg.com' },
     ],
   },
+  // admin.loudrr.com is the admin website: its root opens the panel
+  async redirects() {
+    return [
+      {
+        source: '/',
+        has: [{ type: 'host', value: 'admin.loudrr.com' }],
+        destination: '/admin',
+        permanent: false,
+      },
+    ];
+  },
   async rewrites() {
     return [
       // Trailing slash is re-appended on the destination: the FastAPI routes

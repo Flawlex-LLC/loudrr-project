@@ -233,6 +233,10 @@ app.include_router(feature_interest.router)
 # privileged admin API (RBAC-gated; service-backed). Distinct from the SQLAdmin
 # UI at /admin — this one is for the Next.js admin dashboard and CLI tools.
 app.include_router(admin_api.router)
+# admin website sign-in (Telegram Login Widget -> session cookie); not behind
+# require_admin, it's how you get past it
+from app.api import admin_auth  # noqa: E402
+app.include_router(admin_auth.router)
 
 # the SQLAdmin operations panel at /admin (separate admin login)
 mount_admin(app)

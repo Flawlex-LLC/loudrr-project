@@ -93,10 +93,17 @@ export default function AdminLoginPage() {
     script.setAttribute('data-radius', '12');
     script.setAttribute('data-request-access', 'write');
     script.setAttribute('data-onauth', 'onLoudrrTelegramAuth(user)');
-    script.onload = () => {
+    const shown = () => {
       settled = true;
       setPhase('ready');
       setMessage(null);
+    };
+    // The script adds Telegram's iframe as it runs; the button is only there
+    // once that iframe loads, and telegram.org can stall on either request.
+    script.onload = () => {
+      const frame = host.querySelector('iframe');
+      if (frame) frame.addEventListener('load', shown, { once: true });
+      else shown();
     };
     script.onerror = () => {
       settled = true;

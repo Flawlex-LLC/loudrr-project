@@ -18,10 +18,11 @@ export const metadata: Metadata = {
   },
 };
 
+// No colorScheme: "dark" here. It makes the browser paint Telegram's
+// light-scheme login iframe with an opaque white box around the button.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  colorScheme: "dark",
   themeColor: "#0A0A0A",
 };
 

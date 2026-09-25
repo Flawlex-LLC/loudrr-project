@@ -34,6 +34,15 @@ export default function AppDispatcher() {
         return;
       }
 
+      // t.me/<bot>/app?startapp=admin opens the admin panel. It has to open
+      // inside Telegram: the signed initData is the admin's only credential.
+      // The panel checks the role server-side, so for anyone else this lands
+      // on its "not an admin" screen.
+      if (tg?.initData && tg?.initDataUnsafe?.start_param === 'admin') {
+        router.replace('/admin');
+        return;
+      }
+
       // Approved users have an account; everyone else goes to the waitlist.
       // Only a 401 ("no account") means that — a 5xx or a network blip must
       // not bounce an approved user into the waitlist (which bounces them

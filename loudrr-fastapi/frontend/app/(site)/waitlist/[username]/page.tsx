@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
+import { BOT_APP_URL } from '@/lib/bot'
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://loudrr.com'
-const BOT_APP_URL = 'https://t.me/loudrr_bot/app'
 
 // Server-only: the backend serves the STORED card for handles that are on
 // the waitlist (GET /waitlist/card/<handle>/) — the same score the applicant

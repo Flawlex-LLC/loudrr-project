@@ -20,13 +20,21 @@ const nextConfig: NextConfig = {
       { protocol: 'https', hostname: '*.twimg.com' },
     ],
   },
-  // admin.loudrr.com is the admin website: its root opens the panel
+  // admin.loudrr.com is the admin website: its root opens the panel, and the
+  // panel lives only there. Telegram's login widget works on the one domain
+  // set in BotFather, and the session cookie belongs to that host.
   async redirects() {
     return [
       {
         source: '/',
         has: [{ type: 'host', value: 'admin.loudrr.com' }],
         destination: '/admin',
+        permanent: false,
+      },
+      {
+        source: '/admin/:path*',
+        has: [{ type: 'host', value: '(?:dev-)?app\\.loudrr\\.com' }],
+        destination: 'https://admin.loudrr.com/admin/:path*',
         permanent: false,
       },
     ];

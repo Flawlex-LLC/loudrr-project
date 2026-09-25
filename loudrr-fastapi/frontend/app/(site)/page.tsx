@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import dynamic from "next/dynamic";
+import { BOT_URL } from "@/lib/bot";
 
 const AudioWaveGL = dynamic(() => import("./components/AudioWaveGL"), {
   ssr: false,
@@ -224,7 +225,7 @@ export default function LandingPage() {
             style={{ marginTop: 'clamp(1.5rem, 4vh, 3rem)' }}
           >
             <a
-              href="https://t.me/loudrr_bot?start=waitlist"
+              href={`${BOT_URL}?start=waitlist`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-3 text-black font-syne font-bold transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] whitespace-nowrap focus:outline-none focus:ring-0"

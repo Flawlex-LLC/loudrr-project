@@ -21,8 +21,7 @@
 import { Suspense, useCallback, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
-
-const BOT_APP_URL = 'https://t.me/loudrr_bot/app';
+import { BOT_APP_URL } from '@/lib/bot';
 
 const ERROR_COPY: Record<string, string> = {
   denied: 'You cancelled the X authorization.',

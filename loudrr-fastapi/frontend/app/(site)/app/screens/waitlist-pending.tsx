@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { hapticFeedback, openLink } from '@/lib/telegram';
 import { api, type WaitlistEnrichment } from '@/lib/api';
+import { BOT_APP_URL } from '@/lib/bot';
 import { ClipboardIcon, CheckIconFill, XLogoIcon, TelegramIcon } from '../icons';
 import { describeScoreRefresh } from '../shared';
 
@@ -15,7 +16,6 @@ export function WaitlistPendingScreen({ xUsername, referralCode }: { xUsername?:
   const [copied, setCopied] = useState(false);
 
   const SITE_URL = typeof window !== 'undefined' ? window.location.origin : '';
-  const BOT_USERNAME = 'loudrr_bot';
   const sharePageUrl = xUsername ? `${SITE_URL}/waitlist/${xUsername}` : SITE_URL;
 
   const [enrichment, setEnrichment] = useState<WaitlistEnrichment | null>(null);
@@ -118,8 +118,8 @@ export function WaitlistPendingScreen({ xUsername, referralCode }: { xUsername?:
   // initDataUnsafe.start_param set, so the referral survives into the app
   // (a plain ?start= bot link would need a /start handler to forward it).
   const referralLink = referralCode
-    ? `https://t.me/${BOT_USERNAME}/app?startapp=ref_${referralCode}`
-    : `https://t.me/${BOT_USERNAME}`;
+    ? `${BOT_APP_URL}?startapp=ref_${referralCode}`
+    : BOT_APP_URL;
   const shareText = `I just joined the @loudrrHQ waitlist!\n\nJoin me 👇\n${referralLink}`;
 
   const handleCopy = async () => {

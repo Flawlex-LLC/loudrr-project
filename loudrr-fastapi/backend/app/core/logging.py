@@ -92,6 +92,13 @@ def configure_logging(*, debug: bool, log_level: str = "INFO") -> None:
     root.handlers[:] = [handler]
     root.setLevel(level)
 
+    # httpx logs every request URL at INFO, and the Telegram Bot API puts the
+    # bot token in the URL path (/bot<token>/sendMessage). Keep both HTTP
+    # client loggers at WARNING in every environment so the token never
+    # reaches the logs.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
     # Quiet down a few notoriously noisy third-party loggers in dev. Keep them
     # at INFO so structured events still flow; turn them off only for echo.
     # SQLAlchemy engine echo (when settings.debug=True the engine prints every

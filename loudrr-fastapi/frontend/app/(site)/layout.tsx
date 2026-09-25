@@ -1,19 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Plus_Jakarta_Sans, Syne } from "next/font/google";
 import Script from "next/script";
-import "./globals.css";
+import { plusJakarta, syne } from "../fonts";
+import "../globals.css";
 
-const plusJakarta = Plus_Jakarta_Sans({
-  variable: "--font-plus-jakarta",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
-});
-
-const syne = Syne({
-  variable: "--font-syne",
-  subsets: ["latin"],
-  weight: ["700", "800"],
-});
+// Root layout for the mini-app and the landing page. The admin website has
+// its own root layout in app/(admin): it must not wait on telegram.org.
 
 export const metadata: Metadata = {
   title: "Loudrr - Earn Karma by Engaging",

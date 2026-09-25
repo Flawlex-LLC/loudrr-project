@@ -167,7 +167,7 @@ export function openLink(url: string) {
   if (tg) {
     tg.openLink(url);
   } else {
-    window.open(url, '_blank');
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
 }
 

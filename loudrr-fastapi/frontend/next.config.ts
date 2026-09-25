@@ -37,6 +37,16 @@ const nextConfig: NextConfig = {
         destination: 'https://admin.loudrr.com/admin/:path*',
         permanent: false,
       },
+      // app.loudrr.com is the mini-app host; the landing page is loudrr.com.
+      // Telegram opens whatever URL BotFather has, often the bare domain, so
+      // its root goes to the mini-app. The browser keeps the #tgWebAppData
+      // fragment (Telegram's signed login) across the redirect.
+      {
+        source: '/',
+        has: [{ type: 'host', value: '(?:dev-)?app\\.loudrr\\.com' }],
+        destination: '/app',
+        permanent: false,
+      },
     ];
   },
   async rewrites() {

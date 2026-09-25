@@ -93,13 +93,22 @@ export default function AdminLoginPage() {
     script.setAttribute('data-radius', '12');
     script.setAttribute('data-request-access', 'write');
     script.setAttribute('data-onauth', 'onLoudrrTelegramAuth(user)');
+    // The script adds Telegram's iframe, and the button works once that
+    // iframe's own script runs: it then posts {"event":"ready"}. The
+    // iframe's load event is only a fallback, because it waits for every
+    // font and stylesheet inside the frame and telegram.org can stall on
+    // any of them. The first signal wins and can't undo "Signing you in…".
     const shown = () => {
+      if (settled) return;
       settled = true;
-      setPhase('ready');
+      window.removeEventListener('message', onFrameMessage);
+      setPhase((p) => (p === 'signing' ? p : 'ready'));
       setMessage(null);
     };
-    // The script adds Telegram's iframe as it runs; the button is only there
-    // once that iframe loads, and telegram.org can stall on either request.
+    function onFrameMessage(e: MessageEvent) {
+      if (e.origin === 'https://oauth.telegram.org') shown();
+    }
+    window.addEventListener('message', onFrameMessage);
     script.onload = () => {
       const frame = host.querySelector('iframe');
       if (frame) frame.addEventListener('load', shown, { once: true });
@@ -118,6 +127,7 @@ export default function AdminLoginPage() {
     host.replaceChildren(script);
     return () => {
       window.clearTimeout(timer);
+      window.removeEventListener('message', onFrameMessage);
       host.replaceChildren();
     };
   }, [bot, attempt, onAuth]);

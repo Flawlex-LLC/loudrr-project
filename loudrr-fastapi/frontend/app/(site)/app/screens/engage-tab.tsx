@@ -13,6 +13,23 @@ import { SubmitModal } from '../modals/submit';
  * Extracted from app/app/page.tsx during the modularization refactor.
  */
 
+// Center card `index` in the carousel: cards are 80% of its width, after a
+// 10% spacer, with a 12px gap between them.
+function scrollCarouselTo(
+  container: HTMLDivElement | null,
+  index: number,
+  behavior: ScrollBehavior,
+  isScrollingRef: React.RefObject<boolean>,
+) {
+  if (!container) return;
+  isScrollingRef.current = true; // onScroll ignores programmatic scrolls
+  const cardWidth = container.offsetWidth * 0.8;
+  const spacerWidth = container.offsetWidth * 0.1;
+  const targetScroll = spacerWidth + (index * (cardWidth + 12)) - (container.offsetWidth - cardWidth) / 2;
+  container.scrollTo({ left: Math.max(0, targetScroll), behavior });
+  setTimeout(() => { isScrollingRef.current = false; }, behavior === 'smooth' ? 350 : 100);
+}
+
 export function EngageTab({
   user,
   onUserUpdate,
@@ -56,6 +73,13 @@ export function EngageTab({
   const currentPostIndexRef = useRef(0);
   const isScrollingRef = useRef(false); // Flag to disable onScroll during programmatic scroll
   const claimTooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // The card an engage tap should land on: once it has rendered, and again
+  // when the user comes back from X (see the two effects below)
+  const pendingScrollRef = useRef<number | null>(null);
+  const returnScrollRef = useRef<number | null>(null);
+
+  const scrollToIndex = (index: number, behavior: ScrollBehavior) =>
+    scrollCarouselTo(carouselRef.current, index, behavior, isScrollingRef);
 
   // Check if posts are stale (20+ minutes old)
   const isStale = lastFetchedAt && (Date.now() - lastFetchedAt > STALE_THRESHOLD_MS);
@@ -106,6 +130,39 @@ export function EngageTab({
   useEffect(() => {
     return () => {
       isScrollingRef.current = false;
+    };
+  }, []);
+
+  // After an engage tap, glide to the next card. Only engaged cards + one are
+  // rendered, so the next card exists only after this render — scrolling from
+  // the tap handler hit the end of the carousel and stayed on the tapped card.
+  // If X already put the app in the background, the return handler does it.
+  useEffect(() => {
+    const target = pendingScrollRef.current;
+    if (target === null || document.visibilityState !== 'visible') return;
+    pendingScrollRef.current = null;
+    scrollCarouselTo(carouselRef.current, target, 'smooth', isScrollingRef);
+  }, [engagedPosts]);
+
+  // Back from X: land on the next card with no manual scrolling. Done even if
+  // the scroll above ran, since the WebView can be hidden mid-animation.
+  useEffect(() => {
+    const onReturn = () => {
+      if (document.visibilityState !== 'visible') return;
+      const target = returnScrollRef.current;
+      if (target === null) return;
+      returnScrollRef.current = null;
+      pendingScrollRef.current = null;
+      // let the WebView lay out again after being in the background
+      setTimeout(() => scrollCarouselTo(carouselRef.current, target, 'smooth', isScrollingRef), 150);
+    };
+    document.addEventListener('visibilitychange', onReturn);
+    window.addEventListener('focus', onReturn);
+    window.addEventListener('pageshow', onReturn);
+    return () => {
+      document.removeEventListener('visibilitychange', onReturn);
+      window.removeEventListener('focus', onReturn);
+      window.removeEventListener('pageshow', onReturn);
     };
   }, []);
 
@@ -171,18 +228,7 @@ export function EngageTab({
         // Scroll to first unengaged card after DOM renders
         console.log('[Session] Started, firstUnengagedIndex:', firstUnengagedIndex, 'totalPosts:', data.posts.length, 'engagedCount:', pendingSet.size);
         if (firstUnengagedIndex > 0) {
-          requestAnimationFrame(() => {
-            const container = carouselRef.current;
-            if (container) {
-              isScrollingRef.current = true;
-              const cardWidth = container.offsetWidth * 0.8;
-              const spacerWidth = container.offsetWidth * 0.1;
-              const targetScroll = spacerWidth + (firstUnengagedIndex * (cardWidth + 12)) - (container.offsetWidth - cardWidth) / 2;
-              console.log('[Session] Initial scroll to index:', firstUnengagedIndex, 'targetScroll:', Math.round(targetScroll));
-              container.scrollTo({ left: Math.max(0, targetScroll), behavior: 'instant' });
-              setTimeout(() => { isScrollingRef.current = false; }, 100);
-            }
-          });
+          requestAnimationFrame(() => scrollToIndex(firstUnengagedIndex, 'instant'));
         }
       } else {
         updateEngageData({
@@ -247,17 +293,9 @@ export function EngageTab({
       // Update refs
       currentPostIndexRef.current = nextIndex;
 
-      // Direct DOM scroll - no React state dependency
-      const container = carouselRef.current;
-      if (container) {
-        isScrollingRef.current = true; // Prevent onScroll interference
-        const cardWidth = container.offsetWidth * 0.8;
-        const spacerWidth = container.offsetWidth * 0.1;
-        const targetScroll = spacerWidth + (nextIndex * (cardWidth + 12)) - (container.offsetWidth - cardWidth) / 2;
-        console.log('[Engage] Scrolling to index:', nextIndex, 'targetScroll:', Math.round(targetScroll));
-        container.scrollTo({ left: Math.max(0, targetScroll), behavior: 'smooth' });
-        setTimeout(() => { isScrollingRef.current = false; }, 350);
-      }
+      // Scroll to it once it has rendered, and again on return from X
+      pendingScrollRef.current = nextIndex;
+      returnScrollRef.current = nextIndex;
 
       // Update React state for UI (checkmarks, counter)
       setEngageData(prev => ({
@@ -774,15 +812,7 @@ export function EngageTab({
               if (currentPostIndex > 0) {
                 const newIndex = currentPostIndex - 1;
                 updateEngageData({ currentPostIndex: newIndex });
-                const container = carouselRef.current;
-                if (container) {
-                  isScrollingRef.current = true;
-                  const cardWidth = container.offsetWidth * 0.8;
-                  const spacerWidth = container.offsetWidth * 0.1;
-                  const targetScroll = spacerWidth + (newIndex * (cardWidth + 12)) - (container.offsetWidth - cardWidth) / 2;
-                  container.scrollTo({ left: Math.max(0, targetScroll), behavior: 'smooth' });
-                  setTimeout(() => { isScrollingRef.current = false; }, 350);
-                }
+                scrollToIndex(newIndex, 'smooth');
               }
             }}
             disabled={currentPostIndex <= 0}
@@ -812,15 +842,7 @@ export function EngageTab({
               if (currentPostIndex < maxAllowed) {
                 const newIndex = currentPostIndex + 1;
                 updateEngageData({ currentPostIndex: newIndex });
-                const container = carouselRef.current;
-                if (container) {
-                  isScrollingRef.current = true;
-                  const cardWidth = container.offsetWidth * 0.8;
-                  const spacerWidth = container.offsetWidth * 0.1;
-                  const targetScroll = spacerWidth + (newIndex * (cardWidth + 12)) - (container.offsetWidth - cardWidth) / 2;
-                  container.scrollTo({ left: Math.max(0, targetScroll), behavior: 'smooth' });
-                  setTimeout(() => { isScrollingRef.current = false; }, 350);
-                }
+                scrollToIndex(newIndex, 'smooth');
               }
             }}
             disabled={currentPostIndex >= currentPostIndexRef.current}

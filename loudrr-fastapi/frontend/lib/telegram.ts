@@ -59,7 +59,9 @@ interface TelegramWebApp {
   close: () => void;
   expand: () => void;
   ready: () => void;
-  openLink: (url: string, options?: { try_instant_view?: boolean }) => void;
+  // try_browser: Bot API 7.6+, undocumented; clients ignore names they can't honor
+  openLink: (url: string, options?: { try_instant_view?: boolean; try_browser?: string }) => void;
+  platform?: string; // "android" | "ios" | "tdesktop" | "macos" | "weba" | ...
   showPopup: (params: {
     title?: string;
     message: string;
@@ -168,6 +170,25 @@ export function openLink(url: string) {
     tg.openLink(url);
   } else {
     window.open(url, '_blank', 'noopener,noreferrer');
+  }
+}
+
+/**
+ * Open X's sign-in (OAuth authorize) page in a way that works on phones.
+ *
+ * A tapped x.com link on a phone is handed to the X app, and the X app can't
+ * run third-party sign-in ("flow name login is currently inaccessible"). Apps
+ * only take over links a user taps, not script redirects, so this opens our
+ * /x-login page, which forwards to X by script. On Android it also asks
+ * Telegram for Chrome, a real browser where X sign-in works.
+ */
+export function openXLogin(authorizeUrl: string) {
+  const hop = `${window.location.origin}/x-login#u=${encodeURIComponent(authorizeUrl)}`;
+  const tg = getTelegramWebApp();
+  if (tg) {
+    tg.openLink(hop, tg.platform === 'android' ? { try_browser: 'chrome' } : undefined);
+  } else {
+    window.open(hop, '_blank', 'noopener,noreferrer');
   }
 }
 

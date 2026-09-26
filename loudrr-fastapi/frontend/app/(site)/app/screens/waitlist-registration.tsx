@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { hapticFeedback, openLink } from '@/lib/telegram';
+import { hapticFeedback, openXLogin } from '@/lib/telegram';
+import { XLoginHelp } from '../components/x-login-help';
 import { api, OtherPlatformEntry } from '@/lib/api';
 import { DESIGN_MODE } from '@/lib/mockData';
 import { ICON_GRADIENT_STYLE, REGIONS, NICHES } from '../shared';
@@ -77,6 +78,8 @@ export function WaitlistRegistrationScreen({
   const [loading, setLoading] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [waitingForOAuth, setWaitingForOAuth] = useState(false);
+  // the X sign-in link, for the copy-into-Chrome/Safari fallback
+  const [xAuthUrl, setXAuthUrl] = useState<string | null>(null);
   // someone authorized on X but hasn't confirmed the link in the browser yet
   // (that confirm step is what stops a forwarded authorize link binding
   // someone else's X account to this Telegram account)
@@ -238,7 +241,8 @@ export function WaitlistRegistrationScreen({
       const { authorize_url } = await api.startWaitlistXOAuth();
       hapticFeedback('light');
       setWaitingForOAuth(true);
-      openLink(authorize_url);
+      setXAuthUrl(authorize_url);
+      openXLogin(authorize_url);
     } catch (e: any) {
       setError(e?.message || 'Failed to start X verification');
       hapticFeedback('error');
@@ -454,6 +458,7 @@ export function WaitlistRegistrationScreen({
                   After authorizing on X, return here. We'll detect it automatically.
                 </p>
               )}
+              {waitingForOAuth && !awaitingConfirm && xAuthUrl && <XLoginHelp url={xAuthUrl} />}
             </div>
           </>
         )}

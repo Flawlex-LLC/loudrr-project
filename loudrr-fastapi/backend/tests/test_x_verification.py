@@ -24,7 +24,7 @@ async def test_start_returns_authorize_url(client, make_user, db_session):
     r = await client.post("/x-oauth/start/", params={"telegram_id": 6001})
     assert r.status_code == 200
     url = r.json()["authorize_url"]
-    assert url.startswith("https://twitter.com/i/oauth2/authorize?")
+    assert url.startswith("https://x.com/i/oauth2/authorize?")
     assert "code_challenge_method=S256" in url
     assert "state=" in url
     # a PKCE state row was persisted for the callback to consume

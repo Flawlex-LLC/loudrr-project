@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { hapticFeedback, openLink } from '@/lib/telegram';
+import { hapticFeedback, openXLogin } from '@/lib/telegram';
+import { XLoginHelp } from '../components/x-login-help';
 import { api } from '@/lib/api';
 import { ICON_GRADIENT_STYLE, useUserPolling } from '../shared';
 import { XLogoIcon } from '../icons';
@@ -14,6 +15,8 @@ import { XLogoIcon } from '../icons';
 export function ConnectXScreen({ xUsername, onPoll }: { xUsername: string; onPoll: () => Promise<void> | void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // the X sign-in link, for the copy-into-Chrome/Safari fallback
+  const [xAuthUrl, setXAuthUrl] = useState<string | null>(null);
   useUserPolling(onPoll);
 
   const handleConnect = async () => {
@@ -22,7 +25,8 @@ export function ConnectXScreen({ xUsername, onPoll }: { xUsername: string; onPol
     try {
       const { authorize_url } = await api.startXOAuth();
       hapticFeedback('light');
-      openLink(authorize_url);
+      setXAuthUrl(authorize_url);
+      openXLogin(authorize_url);
     } catch (e: any) {
       setError(e?.message || 'Failed to start verification');
       hapticFeedback('error');
@@ -81,6 +85,7 @@ export function ConnectXScreen({ xUsername, onPoll }: { xUsername: string; onPol
             <>Connect X to get started</>
           )}
         </button>
+        {xAuthUrl && <XLoginHelp url={xAuthUrl} />}
       </div>
 
       <p className="text-gray-600 text-xs text-center max-w-xs">

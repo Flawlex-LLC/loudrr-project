@@ -20,7 +20,8 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-AUTHORIZE_URL = "https://twitter.com/i/oauth2/authorize"
+# X's current sign-in page (twitter.com only redirects here)
+AUTHORIZE_URL = "https://x.com/i/oauth2/authorize"
 TOKEN_URL = "https://api.twitter.com/2/oauth2/token"
 USERS_ME_URL = "https://api.twitter.com/2/users/me"
 

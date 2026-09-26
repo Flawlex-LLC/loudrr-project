@@ -197,6 +197,7 @@ export interface Post {
   tweet_media?: string[];
   tweet_created_at?: string;  // ISO date string
   hours_remaining?: number;   // Hours until post expires
+  quick_reply?: string | null; // this viewer's Quick Reply draft, once written
 }
 
 export interface SessionResponse {

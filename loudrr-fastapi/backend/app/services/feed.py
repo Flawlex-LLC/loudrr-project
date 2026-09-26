@@ -16,7 +16,7 @@ from app.models.engagement import Engagement
 from app.models.post import Post
 from app.models.user import User
 from app.models.x_profile import XProfile
-from app.services import tier
+from app.services import quick_replies, tier
 from app.services.site_settings import get_setting
 
 
@@ -212,6 +212,8 @@ async def format_post(db, post: Post, viewer: User, *, author=None, x_profile=No
         "id": str(post.id),
         "x_link": post.x_link,
         "redirect_url": _redirect_url(post),
+        # this viewer's Quick Reply draft (None until the worker has written them)
+        "quick_reply": quick_replies.draft_for(post, viewer.id),
         "creator": display_name,
         "creator_x_username": x_username,
         "creator_avatar": avatar_url,

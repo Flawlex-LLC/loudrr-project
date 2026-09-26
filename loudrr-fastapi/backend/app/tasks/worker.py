@@ -15,7 +15,7 @@ from arq.connections import RedisSettings
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.services import claims, maintenance, outbox, scores, sponsor_stream, users
+from app.services import claims, maintenance, outbox, quick_replies, scores, sponsor_stream, users
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,20 @@ async def fetch_waitlist_score(ctx, entry_id):
     attempt = ctx.get("job_try", 1)
     if outcome == "unavailable" and attempt <= len(SIGNUP_SCORE_RETRY_DELAYS_S):
         raise Retry(defer=SIGNUP_SCORE_RETRY_DELAYS_S[attempt - 1])
+    return outcome
+
+
+# Quick Reply drafts are written once, when a post is created. If every model
+# on the list failed (free ones rate-limit), retry 2, 10 then 30 minutes later.
+QUICK_REPLY_RETRY_DELAYS_S = (120, 600, 1800)
+
+
+async def generate_quick_replies(ctx, post_id):
+    async with SessionLocal() as db:
+        outcome = await quick_replies.generate_for_post(db, post_id)
+    attempt = ctx.get("job_try", 1)
+    if outcome == "failed" and attempt <= len(QUICK_REPLY_RETRY_DELAYS_S):
+        raise Retry(defer=QUICK_REPLY_RETRY_DELAYS_S[attempt - 1])
     return outcome
 
 
@@ -152,6 +166,7 @@ class WorkerSettings:
         process_verification_batch,
         fetch_tweetscout_for_user,
         fetch_waitlist_score,
+        generate_quick_replies,
         process_pending_outbox_events,
         retry_failed_outbox_events,
         cleanup_old_outbox_events,

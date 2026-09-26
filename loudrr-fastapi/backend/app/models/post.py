@@ -41,6 +41,12 @@ class Post(Base):
     tweet_media: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
     tweet_created_at: Mapped[datetime | None] = mapped_column(default=None)
 
+    # Quick Reply: a few short reply drafts in top-KOL style, written once per
+    # post (services/quick_replies.py); each viewer is shown one of them
+    quick_replies: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
+    quick_replies_model: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    quick_replies_at: Mapped[datetime | None] = mapped_column(default=None)
+
     is_sponsored: Mapped[bool] = mapped_column(default=False, server_default="false")
     # set on posts imported from a monitored sponsor account (platform
     # "sponsor"); those are owned by the platform user, not a real poster

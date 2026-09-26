@@ -97,15 +97,19 @@ export function EngageTab({
       tweetId = match?.[1] || '';
     }
     if (tweetId) {
-      return `https://x.com/intent/post?in_reply_to=${tweetId}`;
+      // prefill this viewer's draft (a short reply in top-creator style); they
+      // can edit it before posting
+      const draft = post.quick_reply ? `&text=${encodeURIComponent(post.quick_reply)}` : '';
+      return `https://x.com/intent/post?in_reply_to=${tweetId}${draft}`;
     }
     // Fallback to original URL if can't extract tweet ID
     return post.x_link;
   };
 
-  // Get the appropriate URL based on the reply-composer toggle
+  // Sponsored posts always open the reply box with a draft; other posts do
+  // when Quick Reply is on, and otherwise just open the post
   const getEngageUrl = (post: Post): string => {
-    return replyIntentEnabled ? getReplyIntentUrl(post) : post.x_link;
+    return post.is_sponsored || replyIntentEnabled ? getReplyIntentUrl(post) : post.x_link;
   };
 
   // Keep refs in sync with state
@@ -781,7 +785,10 @@ export function EngageTab({
               <div className="glass-icon glass-icon-sm glass-icon-orange">
                 <SendIconFill className="w-3.5 h-3.5" style={ICON_GRADIENT_STYLE} />
               </div>
-              <span className="text-sm font-medium text-white">Quick Reply</span>
+              <div className="flex flex-col">
+                <span className="text-sm font-medium text-white">Quick Reply</span>
+                <span className="text-[11px] leading-tight text-gray-400">Opens X with a reply drafted for you</span>
+              </div>
             </div>
             <button
               onClick={() => {

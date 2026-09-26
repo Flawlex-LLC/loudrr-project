@@ -91,7 +91,9 @@ def test_worker_settings_registered():
     assert "requeue_stuck_outbox_events" in names
     # sign-up score fetch — on demand only; deliberately NOT a cron
     assert "fetch_waitlist_score" in names
-    assert len(WorkerSettings.functions) == 12
+    # Quick Reply drafts — written once per new post, on demand, not a cron
+    assert "generate_quick_replies" in names
+    assert len(WorkerSettings.functions) == 13
     assert len(WorkerSettings.cron_jobs) == 9
     assert not any("score" in job.name for job in WorkerSettings.cron_jobs)
 

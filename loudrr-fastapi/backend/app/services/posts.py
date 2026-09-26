@@ -17,7 +17,7 @@ from app.models.post import Post
 from app.models.user import User
 from app.repositories.post import PostRepository
 from app.repositories.x_profile import XProfileRepository
-from app.services import kill_switches
+from app.services import kill_switches, quick_replies
 from app.services.credits import CreditService, InsufficientCreditsError
 from app.services.site_settings import get_setting
 
@@ -195,6 +195,7 @@ async def submit_post(db, *, user, x_link: str, karma_amount=None) -> dict:
 
     user.total_posts += 1
     await db.commit()
+    await quick_replies.queue([post.id])
 
     return {
         "success": True,

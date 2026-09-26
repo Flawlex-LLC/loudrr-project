@@ -44,6 +44,19 @@ class Settings(BaseSettings):
     # doubt "skipped+passed" result (spec §0 #8, §5.2).
     loudrr_gateway_api: str = ""
     gateway_base_url: str = "https://gateway.loudrr.com"
+    # Quick Reply suggestions (services/quick_replies.py) come from OpenRouter.
+    # Each list is tried in order until a model answers. Picked by a bake-off
+    # on real posts with a blind judge: Claude Sonnet 5 wrote the best drafts,
+    # GPT-5.6 Luna nearly as good at a tenth of the price (~$0.0007/post).
+    # Creator posts try free models first (often rate-limited), then near-free
+    # ones; sponsored posts, which clients pay for, get the best writer.
+    # Blank key = no suggestions; the reply box then just opens empty.
+    openrouter_api: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    quick_reply_creator_models: str = (
+        "google/gemma-4-31b-it:free,deepseek/deepseek-v4-flash,openai/gpt-5.6-luna"
+    )
+    quick_reply_sponsored_models: str = "anthropic/claude-sonnet-5,openai/gpt-5.6-luna"
     # The worker holds the gateway's realtime tweet websocket and turns posts
     # of admin-added sponsored accounts into sponsored raid posts
     # (services/sponsor_stream.py). Needs LOUDRR_GATEWAY_API. Off by default:

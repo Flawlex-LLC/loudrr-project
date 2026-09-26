@@ -33,7 +33,7 @@ from app.models.engagement import Engagement
 from app.models.post import Post
 from app.models.sponsored_account import SponsoredAccount
 from app.models.user import User
-from app.services import kill_switches
+from app.services import kill_switches, quick_replies
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +273,7 @@ async def ingest_tweets(db, tweets) -> list[Post]:
             "sponsored post created: @%s tweet %s (%s karma)",
             post.tweet_author_username, post.tweet_id, post.initial_escrow,
         )
+    await quick_replies.queue([post.id for post in created])
     return created
 
 

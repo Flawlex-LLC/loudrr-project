@@ -7,6 +7,12 @@ casing, punctuation, reaction mix). The generator shows the model real
 post -> reply pairs close to the post's topic and holds it to those numbers,
 then cleans what comes back.
 
+Drafts are stored as the model wrote them; each viewer's copy is then typed
+the way regular crypto-Twitter users type under top creators' posts (the
+"crowd" sample, scripts/build_crowd_corpus.py): "u" for "you", "dont",
+"ik", "idk", "rn", lowercase starts, each at the measured rate, stable per
+viewer. So no two people's copies read alike, and none reads like AI.
+
 One OpenRouter call per post writes several drafts, each a different kind of
 reaction, so it isn't a yes-man. On creator posts one draft may ask @grok a
 question, the way people do on X, but only when the post has something to
@@ -49,22 +55,50 @@ TIMEOUT = httpx.Timeout(45.0, connect=10.0)
 # for them); creator posts may get one light "yeah but".
 REACTIONS = {
     "take": "react to one specific thing in the post with your own observation, in your own words",
+    "question": "ask one short, genuine question about it, curious not skeptical",
     "addon": "add a related detail, fact or quick experience of your own that builds on the post",
-    "opinion": "your honest opinion on it in a few words, like you'd tell a friend (not praise)",
+    "opinion": "your honest opinion in a few words, good or bad, like you'd tell a friend (not praise)",
     "banter": "a light joke or playful jab about the post, friendly",
     "hype": "short, genuine excitement like a friend would say it, not a brand",
     "nuance": "a light 'yeah but' or a different angle, curious not rude",
     "grok": "only if the post has something checkable (a claim, a number, a chart, a term or news): tag @grok"
             " with one short, sharp question about it, like the @grok examples. otherwise write a take",
 }
+# Sponsored posts are clients' posts: every account the admin adds on the
+# Sponsors page, whether a project, a founder or a creator. Positive, neutral or
+# curious only, never negative (a negative reply under a client's post loses
+# the client): no pushback, no blunt opinion, no @grok ("@grok is this
+# legit?"), humor only on their side.
+SPONSORED_REACTIONS = {
+    "take": "a positive or neutral observation about one specific thing in it",
+    "question": "one short, curious question about what they announced, never doubting it",
+    "banter": "light humor that's on their side, never at their expense",
+}
+# Community posts (creators on Loudrr engaging each other): positive, curious
+# or mildly skeptical, never harsh, mocking or dismissive toward the person.
+COMMUNITY_REACTIONS = {
+    "opinion": "your honest opinion in a few words, positive or mildly skeptical, never harsh",
+    "banter": "a light, friendly joke, never mocking them",
+}
 # Mostly takes, as in the study: 73-80% of real top replies are takes, while
-# questions, hype and plain agreement are ~3-6% each and do worse among the
-# most-liked. Sponsored posts never get pushback, a blunt opinion or a @grok
-# question ("@grok is this legit?" under a client's post works against them).
+# questions, hype and plain agreement are ~3-6% each.
 PLANS = {
-    "sponsored": ["take", "addon", "take", "banter", "hype", "addon"],
+    "sponsored": ["take", "addon", "question", "take", "hype", "banter"],
     "creator": ["take", "addon", "opinion", "nuance", "banter", "grok"],
 }
+# Harsh, mocking or dismissive: dropped from every draft, community ones too.
+_HARSH = re.compile(
+    r"\b(scam\w*|rug\w*|ponzi|trash|garbage|ngmi|cope|clown\w*|idiot\w*|stupid|dumb|delusional|"
+    r"shut up|(?:nobody|no one|who) asked|l take|cringe|grifter\w*|larp\w*)\b",
+    re.I,
+)
+# Clients' drafts with any of these are dropped too, whatever the model meant.
+_NEGATIVE = re.compile(
+    r"\b(lame|mid|meh|boring|trash|garbage|scam\w*|rug\w*|ponzi|overrated|overhyped|disappoint\w*|"
+    r"consolation|not worth|worst|useless|pointless|cringe|sus|shady|fake|cope|ngmi|bearish|fud|"
+    r"exit liquidity|dumping|dump it|red flag|(?:nobody|no one|who) asked|yikes|smh|ugh)\b",
+    re.I,
+)
 GROK_EXAMPLES = 6
 
 EMOJI = re.compile("[\U0001F300-\U0001FAFF☀-➿\U0001F000-\U0001F2FF⭐⭕]")
@@ -123,13 +157,31 @@ def usable_grok_question(text: str) -> bool:
 
 
 @lru_cache(maxsize=1)
-def profile() -> dict:
-    """Numbers from the study, for the most-liked replies (falls back to all)."""
-    path = DATA / "reply_style_profile.json"
+def crowd() -> list[dict]:
+    """Replies by regular users under top creators' posts ({text, likes, parent})."""
+    path = DATA / "crowd_replies.json"
     if not path.is_file():
-        return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
+        return []
+    rows = json.loads(path.read_text(encoding="utf-8")).get("replies") or []
+    return [r for r in rows if isinstance(r, dict) and r.get("text") and r.get("parent")]
+
+
+@lru_cache(maxsize=1)
+def study() -> dict:
+    """Everything scripts/study_reply_corpus.py measured."""
+    path = DATA / "reply_style_profile.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
+def profile() -> dict:
+    """Top creators' numbers, for their most-liked replies (falls back to all)."""
+    data = study()
     return data.get("most_liked") or data.get("all") or {}
+
+
+def crowd_profile() -> dict:
+    """How regular users type: {"most_liked": {...}, "shortforms": {"rates", "extras"}}."""
+    return study().get("crowd") or {}
 
 
 def max_chars() -> int:
@@ -144,10 +196,19 @@ def _keywords(text: str) -> set[str]:
 
 
 def pick_examples(post_text: str, *, k: int = EXAMPLES, sponsored: bool, rng: random.Random) -> list[dict]:
-    """Pairs whose post shares words with this one first, then well-liked ones;
-    one or two per author so no single voice dominates."""
-    rows = [r for r in corpus() if not (sponsored and _PROFANITY.search(r["text"]))]
-    if not rows:
+    """Half from regular users (how people type), half from top creators (what
+    they say); within each, posts that share words with this one first, then
+    well-liked replies, one or two per author."""
+    people = _pick(crowd(), post_text, k=k // 2, sponsored=sponsored, rng=rng)
+    creators = _pick(corpus(), post_text, k=k - len(people), sponsored=sponsored, rng=rng)
+    picked = people + creators
+    rng.shuffle(picked)
+    return picked
+
+
+def _pick(rows, post_text: str, *, k: int, sponsored: bool, rng: random.Random) -> list[dict]:
+    rows = [r for r in rows if not (sponsored and _PROFANITY.search(r["text"]))]
+    if not rows or k <= 0:
         return []
     words = _keywords(post_text)
 
@@ -163,7 +224,6 @@ def pick_examples(post_text: str, *, k: int = EXAMPLES, sponsored: bool, rng: ra
         per_author[r["author"]] = per_author.get(r["author"], 0) + 1
         if len(picked) >= k:
             break
-    rng.shuffle(picked)
     return picked
 
 
@@ -179,7 +239,12 @@ def pick_grok_examples(post_text: str, *, k: int = GROK_EXAMPLES) -> list[dict]:
 
 def _style_rules() -> str:
     p = profile()
-    lower = p.get("starts_lowercase_pct")
+    people = crowd_profile()
+    lower = (people.get("most_liked") or {}).get("starts_lowercase_pct") or p.get("starts_lowercase_pct")
+    extras = (people.get("shortforms") or {}).get("extras") or {}
+    common = ", ".join(f"{w} ({v}%)" for w, v in list(extras.items())[:8])
+    # share of well-liked crowd replies typed casually (lowercase start) -> drafts
+    phone = max(1, round(DRAFTS_PER_POST * (lower or 35) / 100))
     emoji = p.get("emoji_pct")
     median = (p.get("chars") or {}).get("median")
     lines = [
@@ -191,8 +256,12 @@ def _style_rules() -> str:
         "- usually no period at the end; at most one '!' and rarely",
         f"- emoji: at most one, and only sometimes (about {round(emoji or 10)}% of real replies have one)",
         "- react to THIS post like a person scrolling X, in the moment. mention something specific from it",
-        "- plain words: real replies rarely use slang (lol, ser, gm are ~1-2% each). don't force crypto-speak",
-        "- don't end with a question (only the @grok draft asks one)",
+        "- plain words: real replies rarely use slang. don't force crypto-speak",
+        *([f"- words people drop into real replies (share of replies): {common}"] if common else []),
+        f"- type about {phone} of the drafts the way people type on their phone: shortforms like u, ur, ik,"
+        " idk, ngl, tbh, rn, jk, gonna, dont/im/thats without the apostrophe, 'oh' to open, 'lol' to close."
+        " only where they fit, never several in one reply. the other drafts are typed normally",
+        "- only the draft whose kind is a question (or @grok) asks something; the others react",
         "- never sound like a brand, a bot or an assistant: no 'great point', 'love this', 'couldn't agree more',"
         " 'thanks for sharing', 'game changer', 'exciting', 'incredible', no summarizing the post",
         "- not a yes-man and not negative: each draft is a different kind of reaction (below)",
@@ -218,15 +287,20 @@ def build_messages(post: Post, *, rng: random.Random) -> list[dict]:
             grok = f"\n\n@grok questions people asked under posts, the ones that performed best:\n\n{grok_shots}"
     rules = _style_rules()
     if sponsored:
-        rules += ("\n- this is a partner's post: stay friendly toward them. no negative, sarcastic or"
-                  " disappointed takes about them or what they announced")
+        rules += ("\n- this post is from a client we promote (a project, founder or creator): positive, neutral"
+                  " or curious only. never negative, sarcastic, doubtful or disappointed about them or what they"
+                  " announced")
+    else:
+        rules += ("\n- this is a community member's post: positive, curious or mildly skeptical at most (a light"
+                  " 'yeah but'). never harsh, mocking or dismissive toward them")
     system = (
         "You write replies for crypto X (Twitter), in the voice of top crypto creators. "
         "You only ever answer with JSON.\n\nStyle, from how top creators actually reply:\n" + rules
     )
     handle = post.tweet_author_username or "someone"
     text = (post.tweet_text or "").strip() or "(no text: an image or video post)"
-    kinds = "\n".join(f"{i + 1}. {k}: {REACTIONS[k]}" for i, k in enumerate(plan))
+    wording = {**REACTIONS, **(SPONSORED_REACTIONS if sponsored else COMMUNITY_REACTIONS)}
+    kinds = "\n".join(f"{i + 1}. {k}: {wording[k]}" for i, k in enumerate(plan))
     user = (
         f"Real replies by top creators, each with the post it answered:\n\n{shots}{grok}\n\n"
         f"---\nWrite {len(plan)} different replies to this post by @{handle}:\n\n{text[:1000]}\n\n"
@@ -289,27 +363,78 @@ def parse(content: str) -> list[str]:
     return []
 
 
-def finalize(raw: list[str], *, rng: random.Random, allow_grok: bool = False) -> list[str]:
-    """Clean, drop near-duplicates and copies of real replies, keep at most one
-    @grok question (none unless allowed), and lowercase the start of about as
-    many drafts as real top replies do."""
+def finalize(raw: list[str], *, rng: random.Random, allow_grok: bool = False,
+             sponsored: bool = False) -> list[str]:
+    """Clean, drop near-duplicates and copies of real replies, and keep at most
+    one @grok question (none unless allowed). Casing and shortforms are applied
+    per viewer later (humanize)."""
     # only a real reply long enough to be someone's own line counts as a copy;
     # "lfg" or "@grok is this true?" are just how people talk
-    real = {re.sub(r"\W", "", r["text"].lower()) for r in corpus() if len(r["text"]) >= 25}
-    lower_share = (profile().get("starts_lowercase_pct") or 60) / 100
+    real = {re.sub(r"\W", "", r["text"].lower()) for r in (*corpus(), *crowd()) if len(r["text"]) >= 25}
     out, seen, grok_used = [], set(), False
     for item in raw:
         t = clean(item)
         key = re.sub(r"\W", "", (t or "").lower())
         if not t or key in seen or key in real:
             continue
+        if _HARSH.search(t) or (sponsored and _NEGATIVE.search(t)):
+            continue  # never harsh; and a client's post never gets a negative reply
         if t.startswith("@grok"):
             if grok_used or not allow_grok:
                 continue
             grok_used = True
         seen.add(key)
-        out.append(_lowercase_start(t) if rng.random() < lower_share else t)
+        out.append(t)
     return out
+
+
+# Casual typing, at the rates regular users type it: "when a reply needs
+# 'you', how often is it 'u'". Keys match scripts/study_reply_corpus.py PAIRS.
+# Longer phrases first ("I don't know" before "I know" before "I").
+_APOS = "['\u2019]"
+SHORTFORMS = [
+    ("idk", rf"\bI don{_APOS}?t know\b", "idk"),
+    ("ik", r"\bI know\b", "ik"),
+    ("tbh", r"\bto be honest\b", "tbh"),
+    ("tbh_honestly", r"^honestly,?\s+", "tbh "),
+    ("ngl", r"\bnot (?:gonna|going to) lie\b", "ngl"),
+    ("rn", r"\bright now\b", "rn"),
+    ("gonna", r"\bgoing to\b", "gonna"),
+    ("wanna", r"\bwant to\b", "wanna"),
+    ("kinda", r"\bkind of\b", "kinda"),
+    ("bc", r"\bbecause\b", "bc"),
+    ("tho", r"\bthough\b", "tho"),
+    ("prob", r"\bprobably\b", "prob"),
+    ("ppl", r"\bpeople\b", "ppl"),
+    ("ur", rf"\byou{_APOS}re\b|\byour\b", "ur"),
+    ("u", r"\byou\b", "u"),
+    ("im", rf"\bI{_APOS}m\b", "im"),
+    ("ive", rf"\bI{_APOS}ve\b", "ive"),
+    ("dont", rf"\bdon{_APOS}t\b", "dont"),
+    ("cant", rf"\bcan{_APOS}t\b", "cant"),
+    ("didnt", rf"\bdidn{_APOS}t\b", "didnt"),
+    ("doesnt", rf"\bdoesn{_APOS}t\b", "doesnt"),
+    ("isnt", rf"\bisn{_APOS}t\b", "isnt"),
+    ("thats", rf"\bthat{_APOS}s\b", "thats"),
+    ("ok", r"\bokay\b", "ok"),
+    ("i", r"\bI\b", "i"),
+]
+
+
+def humanize(text: str, rng: random.Random, casualness: float = 1.0) -> str:
+    """One viewer's copy of a draft, typed like regular users type. casualness
+    scales the measured rates (QUICK_REPLY_CASUALNESS); no rate goes past 95%,
+    so it never reads mechanical."""
+    people = crowd_profile()
+    rates = (people.get("shortforms") or {}).get("rates") or {}
+    for key, pattern, short in SHORTFORMS:
+        rate = min(0.95, (rates.get(key) or 0) * casualness)
+        if rate and re.search(pattern, text, flags=re.I) and rng.random() < rate:
+            text = re.sub(pattern, short, text, flags=re.I)
+    lower = (people.get("most_liked") or {}).get("starts_lowercase_pct") or profile().get("starts_lowercase_pct")
+    if lower and rng.random() < min(0.95, lower / 100 * casualness):
+        text = _lowercase_start(text)
+    return text
 
 
 # ---- OpenRouter ----
@@ -353,7 +478,7 @@ async def write_drafts(post: Post, *, client: httpx.AsyncClient | None = None) -
     try:
         for model in models_for(post):
             drafts = finalize(parse(await _complete(client, model, messages) or ""), rng=rng,
-                              allow_grok=not post.is_sponsored)
+                              allow_grok=not post.is_sponsored, sponsored=bool(post.is_sponsored))
             if len(drafts) >= MIN_DRAFTS:
                 return drafts[:DRAFTS_PER_POST], model
             logger.info("quick replies: %s gave %d usable drafts, trying the next model", model, len(drafts))
@@ -389,10 +514,14 @@ async def queue(post_ids) -> None:
         await enqueue("generate_quick_replies", str(pid), job_id=f"quick_replies:{pid}")
 
 
-def draft_for(post: Post, viewer_id) -> str | None:
+def draft_for(post: Post, viewer_id, casualness: float = 1.0) -> str | None:
     """This viewer's draft for this post, the same one every time."""
     drafts = [d for d in (post.quick_replies or []) if isinstance(d, str) and d]
+    # also guards drafts written before these filters existed
+    drafts = [d for d in drafts if not _HARSH.search(d)
+              and not (post.is_sponsored and _NEGATIVE.search(d))]
     if not drafts:
         return None
     digest = hashlib.sha256(f"{viewer_id}:{post.id}".encode()).digest()
-    return drafts[int.from_bytes(digest[:4], "big") % len(drafts)]
+    draft = drafts[int.from_bytes(digest[:4], "big") % len(drafts)]
+    return humanize(draft, random.Random(digest), casualness)

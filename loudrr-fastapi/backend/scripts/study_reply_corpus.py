@@ -23,6 +23,40 @@ from pathlib import Path
 DATA = Path(__file__).resolve().parents[1] / "app" / "reply_data"
 CORPUS = DATA / "reply_style_corpus.json"
 GROK = DATA / "grok_questions.json"
+CROWD = DATA / "crowd_replies.json"
+
+# (key, casual form, formal form): how often a real reply that needs the word
+# types the casual form. The generator applies these rates per viewer
+# (services/quick_replies.py SHORTFORMS uses the same keys).
+PAIRS = [
+    ("u", r"\bu\b", r"\byou\b"),
+    ("ur", r"\bur\b", r"\byour\b|\byou['\u2019]re\b"),
+    ("im", r"\bim\b", r"\bi['\u2019]m\b"),
+    ("ive", r"\bive\b", r"\bi['\u2019]ve\b"),
+    ("dont", r"\bdont\b", r"\bdon['\u2019]t\b"),
+    ("cant", r"\bcant\b", r"\bcan['\u2019]t\b"),
+    ("didnt", r"\bdidnt\b", r"\bdidn['\u2019]t\b"),
+    ("doesnt", r"\bdoesnt\b", r"\bdoesn['\u2019]t\b"),
+    ("isnt", r"\bisnt\b", r"\bisn['\u2019]t\b"),
+    ("thats", r"\bthats\b", r"\bthat['\u2019]s\b"),
+    ("ik", r"\bik\b", r"\bi know\b"),
+    ("idk", r"\bidk\b", r"\bi don['\u2019]?t know\b"),
+    ("rn", r"\brn\b", r"\bright now\b"),
+    ("tbh", r"\btbh\b", r"\bto be honest\b"),
+    ("tbh_honestly", r"^tbh\b", r"^honestly\b"),
+    ("ngl", r"\bngl\b", r"\bnot (?:gonna|going to) lie\b"),
+    ("gonna", r"\bgonna\b", r"\bgoing to\b"),
+    ("wanna", r"\bwanna\b", r"\bwant to\b"),
+    ("kinda", r"\bkinda\b", r"\bkind of\b"),
+    ("bc", r"\b(?:bc|cuz|cause)\b", r"\bbecause\b"),
+    ("tho", r"\btho\b", r"\bthough\b"),
+    ("prob", r"\bprob\b", r"\bprobably\b"),
+    ("ppl", r"\bppl\b", r"\bpeople\b"),
+    ("ok", r"\bok\b", r"\bokay\b"),
+]
+# words people add rather than substitute
+EXTRAS = ["oh", "jk", "lol", "lmao", "ngl", "fr", "tbh", "idk", "ik", "bro", "nah", "yeah", "ya", "yea", "rn",
+          "w", "gm", "ser", "wtf", "omg", "btw", "imo"]
 PROFILE = DATA / "reply_style_profile.json"
 
 EMOJI = re.compile("[\U0001F300-\U0001FAFF☀-➿\U0001F000-\U0001F2FF⭐⭕‼⁉]")
@@ -99,6 +133,70 @@ def describe(replies: list[dict]) -> dict:
         "top_words": [w for w, _ in vocab.most_common(60)],
         "reactions": {k: pct(v, n) for k, v in Counter(reaction(t) for t in texts).most_common()},
     }
+
+
+# Smoothing: a rate from a handful of sightings (tbh 6 of 6) is pulled toward
+# PRIOR_RATE by PRIOR_WEIGHT imaginary sightings, so small counts can't swing
+# a shortform to 0% or 100%; a form never seen gets the prior.
+PRIOR_RATE, PRIOR_WEIGHT = 0.2, 5
+LABELS = {"u": "you", "ur": "your / you're", "im": "I'm", "ive": "I've", "tbh_honestly": "Honestly (to open)", "dont": "don't", "cant": "can't", "didnt": "didn't",
+          "doesnt": "doesn't", "isnt": "isn't", "thats": "that's", "ik": "I know", "idk": "I don't know",
+          "rn": "right now", "tbh": "to be honest", "ngl": "not gonna lie", "gonna": "going to",
+          "wanna": "want to", "kinda": "kind of", "bc": "because", "tho": "though", "prob": "probably",
+          "ppl": "people", "ok": "okay", "i": "I"}
+
+
+def _smoothed(c: int, f: int) -> float:
+    return round((c + PRIOR_RATE * PRIOR_WEIGHT) / (c + f + PRIOR_WEIGHT), 3)
+
+
+def shortforms(texts: list[str]) -> dict:
+    """Smoothed conditional rates (casual / (casual + formal)) and raw counts."""
+    rates, usage = {}, {}
+    for key, casual, formal in PAIRS:
+        c = sum(1 for t in texts if re.search(casual, t.lower()))
+        f = sum(1 for t in texts if re.search(formal, t.lower()))
+        rates[key] = _smoothed(c, f)
+        usage[key] = {"casual": c, "formal": f}
+    i_lower = sum(1 for t in texts if re.search(r"(?:^|\s)i(?:\s|['\u2019]|$)", t))
+    i_upper = sum(1 for t in texts if re.search(r"(?:^|\s)I(?:\s|['\u2019]|$)", t))
+    rates["i"] = _smoothed(i_lower, i_upper)
+    usage["i"] = {"casual": i_lower, "formal": i_upper}
+    n = len(texts)
+    extras = {w: pct(sum(1 for t in texts if re.search(rf"\b{w}\b", t.lower())), n) for w in EXTRAS}
+    return {"rates": rates, "usage": usage, "extras": {k: v for k, v in sorted(extras.items(), key=lambda kv: -kv[1]) if v}}
+
+
+def crowd_report(c: dict) -> list[str]:
+    if not c:
+        return []
+    a, t = c["all"], c["most_liked"]
+    return [
+        "",
+        "## How regular users type under top creators' posts (the crowd)",
+        "",
+        f"{a['replies']} replies (1+ likes) by regular accounts under {c['posts']} of the top creators' most-liked "
+        "posts, the ones X ranks top. This is how Loudrr's users type.",
+        "",
+        "| | Crowd, all | Crowd, most-liked | Top creators |",
+        "|---|---|---|---|",
+        f"| Median length | {a['chars']['median']} chars | {t['chars']['median']} chars | {c['kol_median']} chars |",
+        f"| Starts lowercase | {a['starts_lowercase_pct']}% | {t['starts_lowercase_pct']}% | {c['kol_lower']}% |",
+        f"| Has an emoji | {a['emoji_pct']}% | {t['emoji_pct']}% | {c['kol_emoji']}% |",
+        f"| Ends without punctuation | {a['ending'].get('none', 0)}% | {t['ending'].get('none', 0)}% | {c['kol_none']}% |",
+        "",
+        "When a reply needs the word, how often it's typed the short way. Rates are smoothed "
+        f"(a {round(PRIOR_RATE * 100)}% prior worth {PRIOR_WEIGHT} sightings), so tiny counts can't read as 0% or 100%.",
+        "",
+        "| Short form | Instead of | Rate | Seen (short / long) |",
+        "|---|---|---|---|",
+        *[f"| {k} | {LABELS.get(k, k)} | {round(v * 100)}% | "
+          f"{c['shortforms']['usage'][k]['casual']} / {c['shortforms']['usage'][k]['formal']} |"
+          for k, v in sorted(c["shortforms"]["rates"].items(), key=lambda kv: -kv[1])],
+        "",
+        "Words people add (share of replies): "
+        + ", ".join(f"{k} {v}%" for k, v in c["shortforms"]["extras"].items()),
+    ]
 
 
 def study_grok(rows: list[dict]) -> dict:
@@ -234,10 +332,24 @@ def main(report_path: Path) -> None:
     grok = study_grok([r for r in grok_rows if usable_grok_question(r["question"])])
     if grok:
         grok["excluded_as_noise"] = len(grok_rows) - grok["questions"]
-    PROFILE.write_text(json.dumps({"meta": meta, "all": overall, "most_liked": top, "grok": grok},
+    crowd = {}
+    if CROWD.is_file():
+        cdata = json.loads(CROWD.read_text(encoding="utf-8"))
+        crows = cdata["replies"]
+        clikes = sorted(r.get("likes", 0) for r in crows)
+        ccut = clikes[int(len(clikes) * 0.8)] if clikes else 0
+        ctop = [r for r in crows if r.get("likes", 0) >= ccut] or crows
+        crowd = {
+            "posts": cdata.get("posts"), "all": describe(crows), "most_liked": describe(ctop),
+            "shortforms": shortforms([r["text"] for r in crows]),
+            "kol_median": overall["chars"]["median"], "kol_lower": overall["starts_lowercase_pct"],
+            "kol_emoji": overall["emoji_pct"], "kol_none": overall["ending"].get("none", 0),
+        }
+    PROFILE.write_text(json.dumps({"meta": meta, "all": overall, "most_liked": top, "grok": grok, "crowd": crowd},
                                   ensure_ascii=False, indent=1), encoding="utf-8")
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(report(overall, top, meta) + "\n".join(grok_report(grok)) + "\n", encoding="utf-8")
+    report_path.write_text(report(overall, top, meta) + "\n".join(crowd_report(crowd)) + "\n"
+                           + "\n".join(grok_report(grok)) + "\n", encoding="utf-8")
     print(f"profile -> {PROFILE}\nreport  -> {report_path.resolve()}")
 
 

@@ -476,5 +476,431 @@
    }
   ],
   "excluded_as_noise": 23
+ },
+ "crowd": {
+  "posts": 90,
+  "all": {
+   "replies": 606,
+   "chars": {
+    "p10": 12,
+    "p25": 20,
+    "median": 41,
+    "p75": 69,
+    "p90": 109
+   },
+   "words_median": 8,
+   "under_60_chars_pct": 70.0,
+   "under_100_chars_pct": 87.8,
+   "starts_lowercase_pct": 34.9,
+   "all_lowercase_pct": 30.7,
+   "ending": {
+    "none": 62.7,
+    "period": 13.9,
+    "emoji": 9.2,
+    "question": 8.7,
+    "exclamation": 4.5,
+    "ellipsis": 1.0
+   },
+   "em_dash_pct": 0.2,
+   "en_dash_pct": 0.0,
+   "semicolon_pct": 0.0,
+   "exclamation_pct": 6.1,
+   "question_pct": 12.7,
+   "emoji_pct": 11.7,
+   "hashtag_pct": 0.3,
+   "top_emojis": [
+    "🔥",
+    "😭",
+    "😂",
+    "👀",
+    "🤣",
+    "🫡",
+    "😆",
+    "🚀",
+    "👌",
+    "💥",
+    "👏",
+    "💀"
+   ],
+   "ct_terms": {
+    "lol": 3.0,
+    "bro": 2.3,
+    "bullish": 1.7,
+    "real": 1.5,
+    "gm": 1.3,
+    "sir": 1.2,
+    "tbh": 1.0,
+    "send": 0.8,
+    "crazy": 0.8,
+    "legend": 0.7,
+    "pump": 0.7,
+    "chad": 0.7,
+    "vibes": 0.7,
+    "ser": 0.5,
+    "lmao": 0.5,
+    "king": 0.5,
+    "huge": 0.5,
+    "lfg": 0.3,
+    "lmfao": 0.3,
+    "goat": 0.3,
+    "insane": 0.3,
+    "banger": 0.3,
+    "fren": 0.2,
+    "degen": 0.2,
+    "ngl": 0.2
+   },
+   "top_words": [
+    "good",
+    "like",
+    "back",
+    "lol",
+    "time",
+    "still",
+    "see",
+    "now",
+    "bro",
+    "don’t",
+    "market",
+    "one",
+    "know",
+    "it’s",
+    "before",
+    "thanks",
+    "best",
+    "people",
+    "go",
+    "shit",
+    "think",
+    "every",
+    "bullish",
+    "keep",
+    "money",
+    "liquidity",
+    "real",
+    "work",
+    "crypto",
+    "hope",
+    "part",
+    "gm",
+    "next",
+    "higher",
+    "day",
+    "sure",
+    "that's",
+    "years",
+    "post",
+    "long",
+    "right",
+    "someone",
+    "that’s",
+    "getting",
+    "ethereum",
+    "000",
+    "life",
+    "already",
+    "sir",
+    "need",
+    "great",
+    "bull",
+    "anything",
+    "love",
+    "you’re",
+    "never",
+    "take",
+    "actually",
+    "even",
+    "soon"
+   ],
+   "reactions": {
+    "take": 70.3,
+    "question": 12.7,
+    "hype": 6.4,
+    "humor": 5.6,
+    "agree": 3.0,
+    "pushback": 2.0
+   }
+  },
+  "most_liked": {
+   "replies": 129,
+   "chars": {
+    "p10": 10,
+    "p25": 20,
+    "median": 42,
+    "p75": 74,
+    "p90": 103
+   },
+   "words_median": 8,
+   "under_60_chars_pct": 69.8,
+   "under_100_chars_pct": 88.4,
+   "starts_lowercase_pct": 45.2,
+   "all_lowercase_pct": 39.5,
+   "ending": {
+    "none": 69.0,
+    "period": 10.1,
+    "emoji": 10.1,
+    "question": 8.5,
+    "exclamation": 1.6,
+    "ellipsis": 0.8
+   },
+   "em_dash_pct": 0.0,
+   "en_dash_pct": 0.0,
+   "semicolon_pct": 0.0,
+   "exclamation_pct": 1.6,
+   "question_pct": 14.7,
+   "emoji_pct": 10.1,
+   "hashtag_pct": 0.8,
+   "top_emojis": [
+    "😭",
+    "🤣",
+    "👏",
+    "💀",
+    "🎯",
+    "🖤",
+    "😂",
+    "😆",
+    "🙏"
+   ],
+   "ct_terms": {
+    "lol": 3.1,
+    "bro": 2.3,
+    "real": 2.3,
+    "lmao": 1.6,
+    "lmfao": 1.6,
+    "pump": 1.6,
+    "send": 1.6,
+    "goat": 1.6,
+    "chad": 1.6,
+    "gm": 0.8,
+    "fren": 0.8,
+    "bullish": 0.8,
+    "sir": 0.8,
+    "legend": 0.8,
+    "huge": 0.8,
+    "insane": 0.8,
+    "crazy": 0.8
+   },
+   "top_words": [
+    "good",
+    "back",
+    "like",
+    "see",
+    "work",
+    "one",
+    "zach",
+    "enough",
+    "wolf",
+    "lol",
+    "real",
+    "people",
+    "soon",
+    "getting",
+    "cred",
+    "still",
+    "buying",
+    "probably",
+    "it’s",
+    "look",
+    "shit",
+    "bro",
+    "part",
+    "life",
+    "first",
+    "10m",
+    "already",
+    "now",
+    "interesting",
+    "post",
+    "remember",
+    "want",
+    "fraud",
+    "public",
+    "another",
+    "rather",
+    "honest",
+    "happen",
+    "send",
+    "makes",
+    "sad",
+    "maybe",
+    "less",
+    "business",
+    "ethereum",
+    "figs",
+    "day",
+    "sure",
+    "wtf",
+    "finally",
+    "save",
+    "crypto",
+    "chad",
+    "fall",
+    "site",
+    "copy",
+    "become",
+    "don’t",
+    "later",
+    "world"
+   ],
+   "reactions": {
+    "take": 69.0,
+    "question": 14.7,
+    "humor": 7.8,
+    "agree": 3.9,
+    "hype": 3.1,
+    "pushback": 1.6
+   }
+  },
+  "shortforms": {
+   "rates": {
+    "u": 0.041,
+    "ur": 0.047,
+    "im": 0.125,
+    "ive": 0.111,
+    "dont": 0.207,
+    "cant": 0.083,
+    "didnt": 0.2,
+    "doesnt": 0.154,
+    "isnt": 0.143,
+    "thats": 0.091,
+    "ik": 0.2,
+    "idk": 0.222,
+    "rn": 0.375,
+    "tbh": 0.636,
+    "tbh_honestly": 0.333,
+    "ngl": 0.333,
+    "gonna": 0.364,
+    "wanna": 0.2,
+    "kinda": 0.167,
+    "bc": 0.3,
+    "tho": 0.333,
+    "prob": 0.2,
+    "ppl": 0.235,
+    "ok": 0.333,
+    "i": 0.188
+   },
+   "usage": {
+    "u": {
+     "casual": 4,
+     "formal": 112
+    },
+    "ur": {
+     "casual": 1,
+     "formal": 37
+    },
+    "im": {
+     "casual": 1,
+     "formal": 10
+    },
+    "ive": {
+     "casual": 0,
+     "formal": 4
+    },
+    "dont": {
+     "casual": 5,
+     "formal": 19
+    },
+    "cant": {
+     "casual": 0,
+     "formal": 7
+    },
+    "didnt": {
+     "casual": 1,
+     "formal": 4
+    },
+    "doesnt": {
+     "casual": 1,
+     "formal": 7
+    },
+    "isnt": {
+     "casual": 0,
+     "formal": 2
+    },
+    "thats": {
+     "casual": 1,
+     "formal": 16
+    },
+    "ik": {
+     "casual": 0,
+     "formal": 0
+    },
+    "idk": {
+     "casual": 1,
+     "formal": 3
+    },
+    "rn": {
+     "casual": 2,
+     "formal": 1
+    },
+    "tbh": {
+     "casual": 6,
+     "formal": 0
+    },
+    "tbh_honestly": {
+     "casual": 1,
+     "formal": 0
+    },
+    "ngl": {
+     "casual": 1,
+     "formal": 0
+    },
+    "gonna": {
+     "casual": 3,
+     "formal": 3
+    },
+    "wanna": {
+     "casual": 0,
+     "formal": 0
+    },
+    "kinda": {
+     "casual": 0,
+     "formal": 1
+    },
+    "bc": {
+     "casual": 2,
+     "formal": 3
+    },
+    "tho": {
+     "casual": 3,
+     "formal": 4
+    },
+    "prob": {
+     "casual": 1,
+     "formal": 4
+    },
+    "ppl": {
+     "casual": 3,
+     "formal": 9
+    },
+    "ok": {
+     "casual": 1,
+     "formal": 0
+    },
+    "i": {
+     "casual": 15,
+     "formal": 65
+    }
+   },
+   "extras": {
+    "lol": 3.0,
+    "bro": 2.3,
+    "gm": 1.3,
+    "tbh": 1.0,
+    "oh": 0.8,
+    "yeah": 0.8,
+    "lmao": 0.5,
+    "ser": 0.5,
+    "wtf": 0.5,
+    "nah": 0.3,
+    "rn": 0.3,
+    "w": 0.3,
+    "jk": 0.2,
+    "ngl": 0.2,
+    "idk": 0.2
+   }
+  },
+  "kol_median": 37,
+  "kol_lower": 26.8,
+  "kol_emoji": 6.4,
+  "kol_none": 73.4
  }
 }

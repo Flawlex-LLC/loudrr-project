@@ -213,7 +213,8 @@ async def format_post(db, post: Post, viewer: User, *, author=None, x_profile=No
         "x_link": post.x_link,
         "redirect_url": _redirect_url(post),
         # this viewer's Quick Reply draft (None until the worker has written them)
-        "quick_reply": quick_replies.draft_for(post, viewer.id),
+        "quick_reply": quick_replies.draft_for(
+            post, viewer.id, float(await get_setting(db, "QUICK_REPLY_CASUALNESS", 1.0))),
         "creator": display_name,
         "creator_x_username": x_username,
         "creator_avatar": avatar_url,

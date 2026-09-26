@@ -52,6 +52,49 @@ Most common words: good, it’s, think, like, see, time, one, yeah, people, now,
 
 Most used emojis: 🤣 🐸 🫡 😭 😅 😆 🤝 🙏 👍 😁 💙 👑
 
+## How regular users type under top creators' posts (the crowd)
+
+606 replies (1+ likes) by regular accounts under 90 of the top creators' most-liked posts, the ones X ranks top. This is how Loudrr's users type.
+
+| | Crowd, all | Crowd, most-liked | Top creators |
+|---|---|---|---|
+| Median length | 41 chars | 42 chars | 37 chars |
+| Starts lowercase | 34.9% | 45.2% | 26.8% |
+| Has an emoji | 11.7% | 10.1% | 6.4% |
+| Ends without punctuation | 62.7% | 69.0% | 73.4% |
+
+When a reply needs the word, how often it's typed the short way. Rates are smoothed (a 20% prior worth 5 sightings), so tiny counts can't read as 0% or 100%.
+
+| Short form | Instead of | Rate | Seen (short / long) |
+|---|---|---|---|
+| tbh | to be honest | 64% | 6 / 0 |
+| rn | right now | 38% | 2 / 1 |
+| gonna | going to | 36% | 3 / 3 |
+| tbh_honestly | Honestly (to open) | 33% | 1 / 0 |
+| ngl | not gonna lie | 33% | 1 / 0 |
+| tho | though | 33% | 3 / 4 |
+| ok | okay | 33% | 1 / 0 |
+| bc | because | 30% | 2 / 3 |
+| ppl | people | 24% | 3 / 9 |
+| idk | I don't know | 22% | 1 / 3 |
+| dont | don't | 21% | 5 / 19 |
+| didnt | didn't | 20% | 1 / 4 |
+| ik | I know | 20% | 0 / 0 |
+| wanna | want to | 20% | 0 / 0 |
+| prob | probably | 20% | 1 / 4 |
+| i | I | 19% | 15 / 65 |
+| kinda | kind of | 17% | 0 / 1 |
+| doesnt | doesn't | 15% | 1 / 7 |
+| isnt | isn't | 14% | 0 / 2 |
+| im | I'm | 12% | 1 / 10 |
+| ive | I've | 11% | 0 / 4 |
+| thats | that's | 9% | 1 / 16 |
+| cant | can't | 8% | 0 / 7 |
+| ur | your / you're | 5% | 1 / 37 |
+| u | you | 4% | 4 / 112 |
+
+Words people add (share of replies): lol 3.0%, bro 2.3%, gm 1.3%, tbh 1.0%, oh 0.8%, yeah 0.8%, lmao 0.5%, ser 0.5%, wtf 0.5%, nah 0.3%, rn 0.3%, w 0.3%, jk 0.2%, ngl 0.2%, idk 0.2%
+
 ## Asking @grok
 
 156 real questions that tagged @grok under crypto posts, found from Grok's most-engaged answers and ranked by the question's likes and views plus the attention Grok's answer got (23 image/meme requests, roasts and questions dragging in other accounts left out).

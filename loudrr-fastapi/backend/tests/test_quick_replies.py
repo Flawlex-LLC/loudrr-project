@@ -23,6 +23,15 @@ CORPUS = [
     {"text": "absolute shit take", "author": "c", "likes": 5, "parent": {"text": "eth is dead", "author": "z"}},
 ]
 PROFILE = {"chars": {"median": 38, "p75": 70}, "starts_lowercase_pct": 100.0, "emoji_pct": 8.0}
+CROWD = [
+    {"text": "oh this is actually clean ngl", "author": "anon1", "likes": 12,
+     "parent": {"text": "solana chart update, new highs", "author": "x"}},
+    {"text": "u really shipped this in a week?", "author": "anon2", "likes": 3,
+     "parent": {"text": "we shipped the new app", "author": "y"}},
+]
+# casual typing: always (1.0) so tests are deterministic; lowercase start never
+CROWD_PROFILE = {"most_liked": {"starts_lowercase_pct": 0.0},
+                 "shortforms": {"rates": {"u": 1.0, "dont": 1.0, "i": 1.0}, "extras": {"lol": 5.0, "oh": 2.0}}}
 GROK = [{"question": "@grok is this true?", "score": 9.0,
          "parent": {"text": "solana just flipped eth in daily fees", "author": "x"}}]
 
@@ -30,11 +39,14 @@ GROK = [{"question": "@grok is this true?", "score": 9.0,
 @pytest.fixture(autouse=True)
 def _study_data(monkeypatch):
     qr.corpus.cache_clear()
-    qr.profile.cache_clear()
+    qr.study.cache_clear()
+    qr.crowd.cache_clear()
     qr.grok_questions.cache_clear()
     monkeypatch.setattr(qr, "corpus", lambda: CORPUS)
+    monkeypatch.setattr(qr, "crowd", lambda: CROWD)
     monkeypatch.setattr(qr, "grok_questions", lambda: GROK)
     monkeypatch.setattr(qr, "profile", lambda: PROFILE)
+    monkeypatch.setattr(qr, "crowd_profile", lambda: CROWD_PROFILE)
     monkeypatch.setattr(settings, "openrouter_api", "test-key")
     monkeypatch.setattr(settings, "quick_reply_creator_models", "free/one:free,free/two:free")
     monkeypatch.setattr(settings, "quick_reply_sponsored_models", "better/one,better/two")
@@ -118,12 +130,34 @@ def test_finalize_drops_duplicates_and_copies_of_real_replies():
     rng = __import__("random").Random(1)
     out = qr.finalize(["Same thing", "same thing!", "The chart looks cooked ngl", "wen mainnet", "Fresh take"],
                       rng=rng)
-    # a real creator's own line is dropped, a generic short one isn't; lowercased
-    # because the profile says 100% of top replies start lowercase
-    assert out == ["same thing", "wen mainnet", "fresh take"]
+    # a real creator's own line is dropped, a generic short one isn't; drafts
+    # are stored as written (casing is per viewer, see humanize)
+    assert out == ["Same thing", "wen mainnet", "Fresh take"]
 
 
 # ---- viewers ----
+def test_humanize_types_like_regular_users():
+    rng = __import__("random").Random(1)
+    assert qr.humanize("I don't think you get it", rng) == "i dont think u get it"
+
+
+def test_humanize_leaves_text_alone_at_zero_rates(monkeypatch):
+    monkeypatch.setattr(qr, "crowd_profile", lambda: {"shortforms": {"rates": {"u": 0.0}}})
+    monkeypatch.setattr(qr, "profile", lambda: {"starts_lowercase_pct": 0.0})
+    assert qr.humanize("You don't say", __import__("random").Random(1)) == "You don't say"
+
+
+def test_humanize_does_not_touch_words_inside_words():
+    rng = __import__("random").Random(1)
+    assert qr.humanize("your youth, Iowa", rng) == "your youth, Iowa"  # 'ur' rate is 0 here; no partial matches
+
+
+def test_each_viewers_copy_is_stable_and_casualized():
+    post = _post(quick_replies=["I think you should see this"])
+    viewer = uuid.uuid4()
+    assert qr.draft_for(post, viewer) == qr.draft_for(post, viewer) == "i think u should see this"
+
+
 def test_each_viewer_gets_a_stable_draft_and_viewers_spread_out():
     post = _post(quick_replies=GOOD)
     viewer = uuid.uuid4()
@@ -145,9 +179,17 @@ def test_prompt_has_the_post_real_pairs_and_the_reaction_plan():
     creator = qr.build_messages(_post(is_sponsored=False, platform="web"), rng=rng)[1]["content"]
     assert "nuance" in creator and "grok: only if the post has something checkable" in creator
     system = qr.build_messages(_post(), rng=rng)[0]["content"]
-    assert "partner's post: stay friendly" in system  # clients' posts: no negative takes
-    assert "partner's post" not in qr.build_messages(_post(is_sponsored=False, platform="web"), rng=rng)[0]["content"]
+    assert "from a client we promote (a project, founder or creator): positive, neutral" in system
+    assert "question: one short, curious question about what they announced" in sponsored
+    assert "banter: light humor that's on their side" in sponsored
+    creator_system = qr.build_messages(_post(is_sponsored=False, platform="web"), rng=rng)[0]["content"]
+    assert "client we promote" not in creator_system
+    assert "community member's post: positive, curious or mildly skeptical" in creator_system
+    assert "banter: a light, friendly joke, never mocking them" in qr.build_messages(
+        _post(is_sponsored=False, platform="web"), rng=rng)[1]["content"]
     assert "reply: @grok is this true?" in creator  # real, well-performing @grok questions as examples
+    assert "reply: oh this is actually clean ngl" in creator  # regular users' replies as examples too
+    assert "lol (5.0%)" in qr.build_messages(_post(), rng=rng)[0]["content"]  # measured words people drop in
 
 
 # ---- models ----
@@ -291,3 +333,49 @@ async def test_creator_drafts_may_ask_grok_once():
     async with router.client() as client:
         drafts, _ = await qr.write_drafts(_post(is_sponsored=False, platform="web"), client=client)
     assert sum(1 for d in drafts if d.startswith("@grok")) <= 1
+
+
+# ---- tone: sponsored never negative, creators free ----
+NEGATIVE = ["kinda lame tbh", "nobody asked for this", "feels like a consolation prize", "mid announcement"]
+
+
+def test_sponsored_drafts_are_never_negative():
+    rng = __import__("random").Random(1)
+    assert qr.finalize([*NEGATIVE, "this is clean"], rng=rng, sponsored=True) == ["this is clean"]
+
+
+def test_community_drafts_may_be_mildly_negative_but_never_harsh():
+    rng = __import__("random").Random(1)
+    mild = ["kinda lame tbh", "feels like a consolation prize", "idk feels like same cycle different year tbh"]
+    harsh = ["nobody asked for this", "this is a scam lol", "cope harder", "ngmi"]
+    assert qr.finalize([*mild, *harsh], rng=rng, sponsored=False) == mild
+
+
+async def test_a_model_that_goes_negative_on_a_client_falls_through():
+    router = FakeRouter({"better/one": (200, _answer([*NEGATIVE, "love the timing"])),
+                         "better/two": (200, _answer(GOOD))})
+    async with router.client() as client:
+        drafts, model = await qr.write_drafts(_post(), client=client)
+    assert model == "better/two" and not any(n in drafts for n in NEGATIVE)
+
+
+def test_a_sponsored_post_never_shows_an_old_negative_draft():
+    post = _post(quick_replies=["kinda lame tbh", "clean drop"])
+    for _ in range(20):
+        assert qr.draft_for(post, uuid.uuid4()) == "clean drop"
+
+
+# ---- the casualness dial (QUICK_REPLY_CASUALNESS) ----
+def test_casualness_zero_keeps_the_draft_as_written(monkeypatch):
+    monkeypatch.setattr(qr, "crowd_profile", lambda: {"most_liked": {"starts_lowercase_pct": 50.0},
+                                                      "shortforms": {"rates": {"u": 0.5}}})
+    for seed in range(50):
+        assert qr.humanize("You get it", __import__("random").Random(seed), casualness=0) == "You get it"
+
+
+def test_casualness_scales_the_measured_rate_but_never_past_95_percent(monkeypatch):
+    monkeypatch.setattr(qr, "crowd_profile", lambda: {"shortforms": {"rates": {"u": 0.5}}})
+    monkeypatch.setattr(qr, "profile", lambda: {"starts_lowercase_pct": 0.0})
+    hits = sum(qr.humanize("you get it", __import__("random").Random(s), casualness=3) == "u get it"
+               for s in range(400))
+    assert 340 <= hits < 400  # ~95%: capped, and still not every single time

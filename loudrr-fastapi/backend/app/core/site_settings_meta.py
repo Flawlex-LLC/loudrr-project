@@ -204,6 +204,17 @@ ALL_GROUPS: tuple[SettingGroup, ...] = (
         ),
     ),
     SettingGroup(
+        name="Quick Reply",
+        description="The AI reply drafts Quick Reply types into X's reply box",
+        settings=(
+            SettingSpec("QUICK_REPLY_CASUALNESS", "1.0", "float",
+                        "How casually each viewer's draft is typed. 1 = like real users whose replies get likes"
+                        " (u, dont, gonna, tbh, lowercase i, at their measured rates); 2 = twice as often;"
+                        " 0 = exactly as the AI wrote it", live=True,
+                        min=0, max=3, step=0.1, unit="x"),
+        ),
+    ),
+    SettingGroup(
         name="Scores",
         description="Scores are fetched at sign-up and when a user taps Refresh score in the mini-app — never on a schedule",
         settings=(
